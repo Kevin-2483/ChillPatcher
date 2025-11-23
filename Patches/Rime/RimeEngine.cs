@@ -28,6 +28,10 @@ namespace ChillPatcher.Rime
             // 创建日志目录
             string logDir = Path.Combine(userDataDir, "logs");
             Directory.CreateDirectory(logDir);
+            
+            // 创建 OpenCC 数据目录（在 shared 目录下）
+            string openccDir = Path.Combine(sharedDataDir, "opencc");
+            Directory.CreateDirectory(openccDir);
 
             var traits = RimeApi.RimeTraits.Create();
             traits.SharedDataDir = sharedDataDir;
@@ -38,6 +42,7 @@ namespace ChillPatcher.Rime
             traits.DistributionVersion = "1.0.0";
             traits.LogDir = logDir;           // 设置日志目录
             traits.MinLogLevel = 2;           // 0=INFO, 1=WARNING, 2=ERROR, 3=FATAL
+            traits.PrebuiltDataDir = sharedDataDir;  // OpenCC 从 shared 目录下查找
 
             RimeApi.RimeSetup(ref traits);
             
@@ -64,20 +69,6 @@ namespace ChillPatcher.Rime
             _sessionId = RimeApi.RimeCreateSession();
             if (_sessionId == 0)
                 throw new Exception("创建Rime Session失败");
-
-            // 选择默认 schema (明月拼音)
-            if (!RimeApi.RimeSelectSchema(_sessionId, "luna_pinyin"))
-            {
-                Plugin.Logger.LogWarning("[Rime] 选择 schema 'luna_pinyin' 失败");
-            }
-            else
-            {
-                Plugin.Logger.LogInfo("[Rime] 已选择 schema: luna_pinyin");
-            }
-
-            // 设置默认选项: 关闭 ASCII 模式(启用中文输入)
-            RimeApi.RimeSetOption(_sessionId, "ascii_mode", false);
-            Plugin.Logger.LogInfo("[Rime] 已关闭 ASCII 模式,启用中文输入");
 
             // 检查状态
             var status = RimeApi.RimeStatus.Create();

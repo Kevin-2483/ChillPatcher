@@ -80,11 +80,13 @@
       <RimeDataDir>$(PluginDir)rime-data\</RimeDataDir>
       <RimeSharedDir>$(RimeDataDir)shared\</RimeSharedDir>
       <RimeUserDir>$(RimeDataDir)user\</RimeUserDir>
+      <OpenCCDir>$(RimeSharedDir)opencc\</OpenCCDir>
     </PropertyGroup>
     
     <MakeDir Directories="$(PluginDir)" />
     <MakeDir Directories="$(RimeSharedDir)" />
     <MakeDir Directories="$(RimeUserDir)" />
+    <MakeDir Directories="$(OpenCCDir)" />
     
     <!-- Copy main DLL -->
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDir)" />
@@ -99,6 +101,9 @@
     
     <!-- Copy custom default.yaml to shared/ (使用我们的配置) -->
     <Copy SourceFiles="$(ProjectDir)RimeDefaultConfig\default.yaml" DestinationFolder="$(RimeSharedDir)" />
+    
+    <!-- Copy luna_pinyin.custom.yaml to shared/ (繁简转换配置) -->
+    <Copy SourceFiles="$(ProjectDir)RimeDefaultConfig\luna_pinyin.custom.yaml" DestinationFolder="$(RimeSharedDir)" Condition="Exists('$(ProjectDir)RimeDefaultConfig\luna_pinyin.custom.yaml')" />
     
     <!-- Copy essay (语言模型) -->
     <Copy SourceFiles="$(ProjectDir)rime-schemas\essay\essay.txt" DestinationFolder="$(RimeSharedDir)" />
@@ -121,9 +126,17 @@
     <Copy SourceFiles="$(ProjectDir)rime-schemas\double-pinyin\double_pinyin_flypy.schema.yaml" DestinationFolder="$(RimeSharedDir)" />
     <Copy SourceFiles="$(ProjectDir)rime-schemas\double-pinyin\double_pinyin_mspy.schema.yaml" DestinationFolder="$(RimeSharedDir)" />
     
+    <!-- Copy OpenCC data files (繁简转换必需) -->
+    <ItemGroup>
+      <OpenCCFiles Include="$(ProjectDir)librime\share\opencc\*.json" />
+      <OpenCCFiles Include="$(ProjectDir)librime\share\opencc\*.ocd2" />
+    </ItemGroup>
+    <Copy SourceFiles="@(OpenCCFiles)" DestinationFolder="$(OpenCCDir)" />
+    
     <Message Text="Deployed to: $(PluginDir)" Importance="high" />
     <Message Text="Copied rime.dll" Importance="high" Condition="Exists('$(RimeDllPath)')" />
     <Message Text="Copied Rime schemas to shared: $(RimeSharedDir)" Importance="high" />
+    <Message Text="Copied OpenCC data to: $(OpenCCDir)" Importance="high" />
     <Message Text="User data directory: $(RimeUserDir)" Importance="high" />
     <Warning Text="rime.dll not found at $(RimeDllPath)" Condition="!Exists('$(RimeDllPath)')" />
   </Target>

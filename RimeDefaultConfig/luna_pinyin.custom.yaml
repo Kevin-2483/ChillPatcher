@@ -1,0 +1,22 @@
+# Rime schema settings - 朙月拼音自定义配置
+# encoding: utf-8
+
+patch:
+  # 配置开关：默认启用简化 (词库是繁体，需要转换为简体输出)
+  switches:
+    - name: ascii_mode
+      reset: 0
+      states: [ 中, Ａ ]
+    - name: full_shape
+      states: [ 半角, 全角 ]
+    - name: simplification  # 使用原始名称
+      states: [ 漢字, 汉字 ]
+      reset: 1  # 默认启用简化 (1 = 汉字 = 简体输出)
+    - name: ascii_punct
+      states: [ 。，, ．， ]
+  
+  # 配置简化器：繁→简转换
+  simplifier:
+    option_name: simplification
+    opencc_config: t2s.json  # Traditional to Simplified
+    tips: none

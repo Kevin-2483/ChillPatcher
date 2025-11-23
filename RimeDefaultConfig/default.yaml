@@ -24,6 +24,7 @@ switcher:
   save_options:
     - full_shape
     - ascii_punct
+    - simplification  # 简繁转换 (使用原始名称)
   fold_options: false
   abbreviate_options: true
 
