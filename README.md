@@ -41,7 +41,7 @@ F:\SteamLibrary\steamapps\common\wallpaper_engine\projects\myprojects\chill_with
 
 ### 1. 安装 BepInEx
 
-1. 下载 [BepInEx 5.x](https://github.com/BepInEx/BepInEx/releases) (Unity IL2CPP x64 版本)
+1. 下载 [BepInEx 5.x](https://github.com/BepInEx/BepInEx/releases)
 2. 解压到 Wallpaper Engine 项目目录：
    ```
    wallpaper_engine\projects\myprojects\chill_with_you\
