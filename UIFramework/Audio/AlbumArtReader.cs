@@ -187,5 +187,91 @@ namespace ChillPatcher.UIFramework.Audio
                 return null;
             }
         }
+
+        /// <summary>
+        /// 从 Texture2D 创建方形 Sprite（无遮罩）
+        /// </summary>
+        /// <param name="texture">源纹理</param>
+        /// <param name="size">Sprite 的大小（像素）</param>
+        /// <returns>方形的 Sprite</returns>
+        public static Sprite CreateSquareSprite(Texture2D texture, int size = 88)
+        {
+            if (texture == null)
+                return null;
+
+            try
+            {
+                // 创建一个新的正方形纹理
+                Texture2D squareTexture = new Texture2D(size, size, TextureFormat.RGBA32, false);
+                squareTexture.filterMode = FilterMode.Bilinear;
+                
+                // 计算源纹理的缩放，裁剪成正方形
+                float sourceAspect = (float)texture.width / texture.height;
+                int sourceX, sourceY, sourceSize;
+                
+                if (sourceAspect > 1f)
+                {
+                    // 宽度大于高度，使用高度作为基准
+                    sourceSize = texture.height;
+                    sourceX = (texture.width - sourceSize) / 2;
+                    sourceY = 0;
+                }
+                else
+                {
+                    // 高度大于宽度，使用宽度作为基准
+                    sourceSize = texture.width;
+                    sourceX = 0;
+                    sourceY = (texture.height - sourceSize) / 2;
+                }
+
+                // 获取源纹理的中心正方形区域
+                Color[] sourcePixels = texture.GetPixels(sourceX, sourceY, sourceSize, sourceSize);
+                
+                // 缩放到目标大小
+                Color[] pixels = new Color[size * size];
+
+                for (int y = 0; y < size; y++)
+                {
+                    for (int x = 0; x < size; x++)
+                    {
+                        int index = y * size + x;
+                        
+                        // 双线性插值采样源纹理
+                        float u = (float)x / size;
+                        float v = (float)y / size;
+                        int srcX = Mathf.FloorToInt(u * sourceSize);
+                        int srcY = Mathf.FloorToInt(v * sourceSize);
+                        int srcIndex = srcY * sourceSize + srcX;
+                        
+                        if (srcIndex >= 0 && srcIndex < sourcePixels.Length)
+                        {
+                            pixels[index] = sourcePixels[srcIndex];
+                        }
+                        else
+                        {
+                            pixels[index] = Color.white;
+                        }
+                    }
+                }
+
+                squareTexture.SetPixels(pixels);
+                squareTexture.Apply();
+
+                // 创建 Sprite
+                Sprite sprite = Sprite.Create(
+                    squareTexture,
+                    new Rect(0, 0, size, size),
+                    new Vector2(0.5f, 0.5f),
+                    100f
+                );
+
+                return sprite;
+            }
+            catch (Exception ex)
+            {
+                Plugin.Logger.LogError($"[AlbumArtReader] Error creating square sprite: {ex.Message}");
+                return null;
+            }
+        }
     }
 }

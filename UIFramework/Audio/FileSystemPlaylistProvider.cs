@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Bulbul;
 using ChillPatcher.UIFramework.Core;
+using ChillPatcher.UIFramework.Data;
 using ChillPatcher.UIFramework.Music;
 using Newtonsoft.Json;
 using UnityEngine;
@@ -12,25 +13,38 @@ using UnityEngine;
 namespace ChillPatcher.UIFramework.Audio
 {
     /// <summary>
-    /// 文件系统歌单提供器 - 支持JSON缓存
+    /// 文件系统歌单提供器 - 使用数据库存储，支持专辑
     /// </summary>
     public class FileSystemPlaylistProvider : IPlaylistProvider, IDisposable
     {
+        private const string OTHER_ALBUM_SUFFIX = "_other";
+        private const string PLAYLIST_JSON = "playlist.json";
+        private const string ALBUM_JSON = "album.json";
+        private const string RESCAN_FLAG = "!rescan_playlist";
+
         private readonly string _directoryPath;
         private readonly IAudioLoader _audioLoader;
-        private PlaylistCacheData _cacheData;
         private List<GameAudioInfo> _runtimeSongs;
-        private string _playlistJsonPath;
-        private string _rescanFlagPath; // 标志文件路径
+
+        // 专辑相关
+        private readonly List<string> _registeredAlbumIds = new List<string>();
 
         public string Id { get; private set; }
         public string DisplayName { get; private set; }
         public Sprite Icon { get; private set; }
         public AudioTag Tag { get; set; }
         public bool SupportsLiveUpdate => true;
-        public string CustomTagId { get; private set; } // 自定义Tag ID
+        public string CustomTagId { get; private set; }
+        
+        /// <summary>
+        /// 歌单目录路径
+        /// </summary>
+        public string DirectoryPath => _directoryPath;
 
         public event Action OnPlaylistUpdated;
+
+        private string RescanFlagPath => Path.Combine(_directoryPath, RESCAN_FLAG);
+        private string PlaylistJsonPath => Path.Combine(_directoryPath, PLAYLIST_JSON);
 
         public FileSystemPlaylistProvider(string directoryPath, IAudioLoader audioLoader, AudioTag tag = AudioTag.Local)
         {
@@ -46,387 +60,535 @@ namespace ChillPatcher.UIFramework.Audio
             // 默认ID和名称
             Id = Path.GetFileName(_directoryPath);
             DisplayName = Id;
-            
-            // ✅ 注册自定义Tag并获取位值
+
+            // 读取playlist.json获取自定义名称
+            LoadPlaylistMetadata();
+
+            // 注册自定义Tag
             CustomTagId = $"playlist_{Id}";
             var customTag = CustomTagManager.Instance.RegisterTag(CustomTagId, DisplayName);
-            Tag = customTag.BitValue; // 使用分配的位值
-            
-            _playlistJsonPath = Path.Combine(_directoryPath, "playlist.json");
-            _rescanFlagPath = Path.Combine(_directoryPath, "!rescan_playlist");
+            Tag = customTag.BitValue;
         }
 
-        public async Task<List<GameAudioInfo>> BuildPlaylist()
+        /// <summary>
+        /// 加载歌单元数据（playlist.json）
+        /// </summary>
+        private void LoadPlaylistMetadata()
         {
             try
             {
-                // 检查是否需要强制重新扫描（标志文件不存在）
-                bool forceRescan = ShouldForceRescan();
-                
+                if (File.Exists(PlaylistJsonPath))
+                {
+                    var json = File.ReadAllText(PlaylistJsonPath);
+                    var metadata = JsonConvert.DeserializeObject<PlaylistMetadata>(json);
+                    if (metadata != null && !string.IsNullOrEmpty(metadata.DisplayName))
+                    {
+                        DisplayName = metadata.DisplayName;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework")
+                    .LogWarning($"[Playlist] 读取playlist.json失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 保存歌单元数据
+        /// </summary>
+        private void SavePlaylistMetadata()
+        {
+            try
+            {
+                var metadata = new PlaylistMetadata
+                {
+                    DisplayName = DisplayName
+                };
+                var json = JsonConvert.SerializeObject(metadata, Formatting.Indented);
+                File.WriteAllText(PlaylistJsonPath, json);
+            }
+            catch (Exception ex)
+            {
+                BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework")
+                    .LogWarning($"[Playlist] 保存playlist.json失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 构建歌单
+        /// </summary>
+        public async Task<List<GameAudioInfo>> BuildPlaylist()
+        {
+            var logger = BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework");
+            
+            try
+            {
+                // 检查是否需要重新扫描
+                // 1. 本地重扫描标记不存在
+                // 2. 或全局需要重扫描（数据库升级/恢复）
+                bool forceRescan = !File.Exists(RescanFlagPath) || 
+                                   (CustomPlaylistDataManager.Instance?.NeedsFullRescan ?? false);
+
                 if (forceRescan)
                 {
-                    BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogInfo($"[Playlist] 检测到需要重新扫描: {DisplayName}");
+                    logger.LogInfo($"[Playlist] 需要重新扫描: {DisplayName}");
                 }
 
-                // 优先从缓存加载
-                if (!forceRescan && PluginConfig.EnablePlaylistCache.Value && LoadCache())
+                // 清理之前注册的专辑
+                UnregisterAllAlbums();
+
+                if (forceRescan)
                 {
-                    BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogInfo($"[Playlist] 从缓存加载歌单: {DisplayName}");
-                    _runtimeSongs = await BuildSongsFromCache();
+                    // 全新扫描并保存到数据库
+                    _runtimeSongs = await ScanAndSaveToDatabase();
+                    
+                    // 创建重扫描标记
+                    CreateRescanFlag();
+                    
+                    // 如果没有playlist.json，创建一个
+                    if (!File.Exists(PlaylistJsonPath))
+                    {
+                        SavePlaylistMetadata();
+                    }
                 }
                 else
                 {
-                    // 增量扫描：合并现有缓存和新文件
-                    if (!forceRescan && LoadCache())
-                    {
-                        BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogInfo($"[Playlist] 增量更新模式: {DisplayName}");
-                        _runtimeSongs = await IncrementalScan();
-                    }
-                    else
-                    {
-                        // 全新扫描文件系统
-                        BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogInfo($"[Playlist] 全新扫描目录: {_directoryPath}");
-                        _runtimeSongs = await ScanDirectoryAndBuild();
-                    }
-
-                    // 自动生成JSON
-                    if (PluginConfig.AutoGeneratePlaylistJson.Value)
-                    {
-                        GenerateCache();
-                    }
-                    
-                    // 创建标志文件
-                    CreateRescanFlag();
+                    // 从数据库加载
+                    _runtimeSongs = await LoadFromDatabase();
                 }
 
-                // ⚠️ Tag注册已移到Plugin.SetupFolderPlaylistsAsync统一批量处理
-                
-                BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogInfo($"[Playlist] 加载完成 '{DisplayName}': {_runtimeSongs.Count} 首歌曲");
+                // 注册专辑到AlbumManager
+                RegisterAlbumsToManager();
+
+                logger.LogInfo($"[Playlist] 加载完成 '{DisplayName}': {_runtimeSongs.Count} 首歌曲, {_registeredAlbumIds.Count} 个专辑");
 
                 OnPlaylistUpdated?.Invoke();
-
                 return _runtimeSongs;
             }
             catch (Exception ex)
             {
-                BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogError($"[Playlist] 构建歌单失败 '{DisplayName}': {ex}");
+                logger.LogError($"[Playlist] 构建歌单失败 '{DisplayName}': {ex}");
                 return new List<GameAudioInfo>();
             }
         }
 
         /// <summary>
-        /// 强制刷新歌单（重新扫描）
+        /// 强制刷新歌单
         /// </summary>
         public async Task Refresh()
         {
-            _cacheData = null;
+            // 删除重扫描标记，触发重新扫描
+            if (File.Exists(RescanFlagPath))
+            {
+                File.Delete(RescanFlagPath);
+            }
             _runtimeSongs = null;
             await BuildPlaylist();
         }
 
         /// <summary>
-        /// 加载缓存文件
+        /// 扫描目录并保存到数据库
         /// </summary>
-        private bool LoadCache()
+        private async Task<List<GameAudioInfo>> ScanAndSaveToDatabase()
         {
-            if (!File.Exists(_playlistJsonPath))
-                return false;
+            var logger = BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework");
+            var allSongs = new List<GameAudioInfo>();
+            var db = CustomPlaylistDataManager.Instance;
+            
+            // 获取数据库中已有的歌曲（用于保留UUID）
+            var existingSongs = db?.GetDatabase()?.GetSongsByPlaylist(Id) ?? new List<SongData>();
+            var existingByPath = existingSongs.ToDictionary(s => s.FilePath, s => s);
 
-            try
+            // 清理数据库中此歌单的过时数据
+            CleanupStaleData(existingByPath);
+
+            // 1. 扫描根目录的歌曲（归入"其他"专辑）
+            var otherAlbumId = Id + OTHER_ALBUM_SUFFIX;
+            var rootSongs = await ScanDirectoryForSongs(_directoryPath, otherAlbumId, existingByPath, 0);
+            
+            if (rootSongs.Count > 0)
             {
-                var json = File.ReadAllText(_playlistJsonPath);
-                _cacheData = JsonConvert.DeserializeObject<PlaylistCacheData>(json);
-
-                if (_cacheData == null)
-                    return false;
-
-                // 更新歌单信息
-                DisplayName = _cacheData.PlaylistName ?? Path.GetFileName(_directoryPath);
-                Id = _directoryPath; // 使用路径作为唯一ID
-
-                BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogInfo($"[Playlist] 缓存加载成功: {DisplayName} (版本 {_cacheData.Version})");
-                return true;
+                // 保存"其他"专辑到数据库
+                db?.GetDatabase()?.SaveAlbum(otherAlbumId, Id, _directoryPath, "其他", true);
+                _registeredAlbumIds.Add(otherAlbumId);
+                allSongs.AddRange(rootSongs);
+                logger.LogInfo($"[Playlist] '其他'专辑: {rootSongs.Count} 首歌曲");
             }
-            catch (Exception ex)
+
+            // 2. 扫描子目录作为专辑
+            var subdirs = Directory.GetDirectories(_directoryPath);
+            foreach (var albumDir in subdirs)
             {
-                BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogWarning($"[Playlist] 缓存解析失败: {ex.Message}");
-                return false;
+                var albumName = Path.GetFileName(albumDir);
+                var albumId = $"{Id}_{albumName}";
+                
+                // 读取album.json获取自定义名称
+                var displayName = LoadAlbumDisplayName(albumDir, albumName);
+
+                // 扫描专辑目录（递归一层）
+                var albumSongs = await ScanDirectoryForSongs(albumDir, albumId, existingByPath, 1);
+
+                if (albumSongs.Count > 0)
+                {
+                    // 保存专辑到数据库
+                    db?.GetDatabase()?.SaveAlbum(albumId, Id, albumDir, displayName, false);
+                    _registeredAlbumIds.Add(albumId);
+                    allSongs.AddRange(albumSongs);
+                    logger.LogInfo($"[Playlist] 专辑 '{displayName}': {albumSongs.Count} 首歌曲");
+                }
             }
+
+            return allSongs;
         }
 
         /// <summary>
-        /// 从缓存构建歌曲列表
+        /// 扫描目录获取歌曲（支持递归一层）
         /// </summary>
-        private async Task<List<GameAudioInfo>> BuildSongsFromCache()
+        private async Task<List<GameAudioInfo>> ScanDirectoryForSongs(
+            string directory, 
+            string albumId, 
+            Dictionary<string, SongData> existingByPath,
+            int maxDepth)
         {
             var songs = new List<GameAudioInfo>();
-            bool needsUpdate = false; // 标记是否需要更新缓存
+            var db = CustomPlaylistDataManager.Instance;
 
-            foreach (var cachedSong in _cacheData.Songs)
+            // 扫描当前目录
+            await ScanSingleDirectory(directory, albumId, existingByPath, songs);
+
+            // 如果允许递归，扫描子目录
+            if (maxDepth > 0)
             {
-                if (!cachedSong.Enabled)
-                    continue;
-
-                var filePath = Path.Combine(_directoryPath, cachedSong.FileName);
-
-                if (!File.Exists(filePath))
+                var subdirs = Directory.GetDirectories(directory);
+                foreach (var subdir in subdirs)
                 {
-                    BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogWarning($"[Playlist] 歌曲文件不存在: {cachedSong.FileName}");
-                    continue;
+                    await ScanSingleDirectory(subdir, albumId, existingByPath, songs);
                 }
+            }
 
+            return songs;
+        }
+
+        /// <summary>
+        /// 扫描单个目录
+        /// </summary>
+        private async Task ScanSingleDirectory(
+            string directory,
+            string albumId,
+            Dictionary<string, SongData> existingByPath,
+            List<GameAudioInfo> songs)
+        {
+            var db = CustomPlaylistDataManager.Instance;
+            var files = Directory.GetFiles(directory)
+                .Where(f => _audioLoader.IsSupportedFormat(f))
+                .ToList();
+
+            foreach (var filePath in files)
+            {
                 try
                 {
-                    // ✅ 检查缓存中是否有UUID
-                    string uuid = cachedSong.UUID;
-                    if (string.IsNullOrEmpty(uuid))
+                    string uuid;
+                    
+                    // 检查是否已有UUID
+                    if (existingByPath.TryGetValue(filePath, out var existing))
                     {
-                        // 生成新UUID并标记需要更新
+                        uuid = existing.UUID;
+                    }
+                    else
+                    {
                         uuid = Guid.NewGuid().ToString();
-                        cachedSong.UUID = uuid;
-                        needsUpdate = true;
-                        BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogInfo($"[Playlist] 为歌曲 '{cachedSong.FileName}' 生成新UUID: {uuid}");
                     }
 
                     var audioInfo = await _audioLoader.LoadFromFile(filePath, uuid);
-
                     if (audioInfo != null)
                     {
-                        // 使用缓存的元数据覆盖
-                        if (!string.IsNullOrEmpty(cachedSong.Title))
-                            audioInfo.Title = cachedSong.Title;
-                        if (!string.IsNullOrEmpty(cachedSong.Artist))
-                            audioInfo.Credit = cachedSong.Artist;  // Credit字段相当于Artist
-                        // Album字段不存在，忽略
+                        // 尝试获取更详细的艺术家信息
+                        string artist = audioInfo.Credit;
+                        if (string.IsNullOrEmpty(artist))
+                        {
+                            artist = GetArtistFromFile(filePath);
+                        }
+                        
+                        // 保存到数据库
+                        var fileInfo = new FileInfo(filePath);
+                        db?.GetDatabase()?.SaveSong(
+                            uuid, Id, albumId,
+                            Path.GetFileName(filePath), filePath,
+                            audioInfo.Title, artist,
+                            fileInfo.LastWriteTime
+                        );
 
                         songs.Add(audioInfo);
                     }
                 }
                 catch (Exception ex)
                 {
-                    BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogError($"[Playlist] 加载歌曲失败 '{cachedSong.FileName}': {ex.Message}");
+                    BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework")
+                        .LogError($"[Playlist] 加载歌曲失败 '{filePath}': {ex.Message}");
                 }
             }
+        }
 
-            // ✅ 如果有歌曲缺少UUID，更新缓存文件
-            if (needsUpdate && PluginConfig.AutoGeneratePlaylistJson.Value)
+        /// <summary>
+        /// 从数据库加载歌单
+        /// </summary>
+        private async Task<List<GameAudioInfo>> LoadFromDatabase()
+        {
+            var songs = new List<GameAudioInfo>();
+            var db = CustomPlaylistDataManager.Instance;
+            var logger = BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework");
+
+            // 获取所有专辑
+            var albums = db?.GetDatabase()?.GetAlbumsByPlaylist(Id) ?? new List<(string, string, bool)>();
+            var staleAlbums = new List<string>();
+            
+            foreach (var (albumId, displayName, isOther) in albums)
             {
+                // 检查专辑目录是否存在
+                var albumInfo = db?.GetDatabase()?.GetAlbum(albumId);
+                if (albumInfo.HasValue && !string.IsNullOrEmpty(albumInfo.Value.directoryPath))
+                {
+                    if (!Directory.Exists(albumInfo.Value.directoryPath))
+                    {
+                        staleAlbums.Add(albumId);
+                        logger.LogWarning($"[Playlist] 专辑目录不存在: {albumInfo.Value.directoryPath}");
+                        continue;
+                    }
+                }
+                _registeredAlbumIds.Add(albumId);
+            }
+            
+            // 清理不存在的专辑
+            foreach (var albumId in staleAlbums)
+            {
+                db?.GetDatabase()?.DeleteAlbum(albumId);
+                logger.LogInfo($"[Playlist] 清理不存在的专辑: {albumId}");
+            }
+
+            // 获取所有歌曲
+            var songDataList = db?.GetDatabase()?.GetSongsByPlaylist(Id) ?? new List<SongData>();
+            var staleSongs = new List<string>();
+            
+            foreach (var songData in songDataList)
+            {
+                // 检查文件是否存在
+                if (!File.Exists(songData.FilePath))
+                {
+                    staleSongs.Add(songData.UUID);
+                    logger.LogWarning($"[Playlist] 歌曲文件不存在: {songData.FilePath}");
+                    continue;
+                }
+
                 try
                 {
-                    var json = JsonConvert.SerializeObject(_cacheData, Formatting.Indented);
-                    File.WriteAllText(_playlistJsonPath, json);
-                    BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogInfo($"[Playlist] 缓存已更新UUID: {_playlistJsonPath}");
+                    var audioInfo = await _audioLoader.LoadFromFile(songData.FilePath, songData.UUID);
+                    if (audioInfo != null)
+                    {
+                        // 使用数据库中的元数据
+                        if (!string.IsNullOrEmpty(songData.Title))
+                            audioInfo.Title = songData.Title;
+                        if (!string.IsNullOrEmpty(songData.Artist))
+                            audioInfo.Credit = songData.Artist;
+
+                        songs.Add(audioInfo);
+                    }
                 }
                 catch (Exception ex)
                 {
-                    BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogError($"[Playlist] 更新缓存失败: {ex.Message}");
+                    logger.LogError($"[Playlist] 加载歌曲失败 '{songData.FilePath}': {ex.Message}");
                 }
+            }
+            
+            // 清理不存在的歌曲
+            foreach (var uuid in staleSongs)
+            {
+                db?.GetDatabase()?.DeleteSong(uuid);
+                db?.RemoveFavorite(CustomTagId, uuid);
+                db?.RemoveExcluded(CustomTagId, uuid);
+            }
+            
+            if (staleSongs.Count > 0 || staleAlbums.Count > 0)
+            {
+                logger.LogInfo($"[Playlist] 清理过时数据: {staleSongs.Count} 首歌曲, {staleAlbums.Count} 个专辑");
             }
 
             return songs;
         }
 
         /// <summary>
-        /// 扫描目录并构建歌单
+        /// 清理数据库中的过时数据
         /// </summary>
-        private async Task<List<GameAudioInfo>> ScanDirectoryAndBuild()
+        private void CleanupStaleData(Dictionary<string, SongData> existingByPath)
         {
-            // 仅扫描当前目录，不递归
-            var songs = await _audioLoader.LoadFromDirectory(_directoryPath, recursive: false);
-            return songs;
+            var db = CustomPlaylistDataManager.Instance;
+            var logger = BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework");
+            
+            int removedSongs = 0;
+            int removedAlbums = 0;
+
+            // 检查歌曲文件是否存在
+            foreach (var kvp in existingByPath)
+            {
+                if (!File.Exists(kvp.Key))
+                {
+                    db?.GetDatabase()?.DeleteSong(kvp.Value.UUID);
+                    
+                    // 同时清理相关的收藏和排除
+                    db?.RemoveFavorite(CustomTagId, kvp.Value.UUID);
+                    db?.RemoveExcluded(CustomTagId, kvp.Value.UUID);
+                    
+                    removedSongs++;
+                }
+            }
+
+            // 检查专辑目录是否存在
+            var albums = db?.GetDatabase()?.GetAlbumsByPlaylist(Id) ?? new List<(string, string, bool)>();
+            foreach (var (albumId, displayName, isOther) in albums)
+            {
+                var albumInfo = db?.GetDatabase()?.GetAlbum(albumId);
+                if (albumInfo.HasValue && !Directory.Exists(albumInfo.Value.directoryPath))
+                {
+                    db?.GetDatabase()?.DeleteAlbum(albumId);
+                    removedAlbums++;
+                }
+            }
+
+            if (removedSongs > 0 || removedAlbums > 0)
+            {
+                logger.LogInfo($"[Playlist] 清理过时数据: {removedSongs} 首歌曲, {removedAlbums} 个专辑");
+            }
         }
 
         /// <summary>
-        /// 生成缓存JSON文件
+        /// 读取专辑的自定义名称
         /// </summary>
-        private void GenerateCache()
+        private string LoadAlbumDisplayName(string albumDir, string defaultName)
         {
             try
             {
-                _cacheData = new PlaylistCacheData
+                var albumJsonPath = Path.Combine(albumDir, ALBUM_JSON);
+                if (File.Exists(albumJsonPath))
                 {
-                    Version = 1,
-                    PlaylistName = DisplayName,
-                    Description = $"自动生成于 {DateTime.Now:yyyy-MM-dd HH:mm:ss}",
-                    Tags = new List<string>(),
-                    Songs = new List<CachedSongData>(),
-                    GeneratedAt = DateTime.Now,
-                    LastModified = DateTime.Now
-                };
-
-                // 添加歌曲到缓存
-                foreach (var song in _runtimeSongs)
-                {
-                    var fileName = Path.GetFileName(song.LocalPath);
-                    var fileInfo = new FileInfo(song.LocalPath);
-
-                    _cacheData.Songs.Add(new CachedSongData
+                    var json = File.ReadAllText(albumJsonPath);
+                    var metadata = JsonConvert.DeserializeObject<AlbumMetadata>(json);
+                    if (metadata != null && !string.IsNullOrEmpty(metadata.DisplayName))
                     {
-                        FileName = fileName,
-                        Title = song.Title,
-                        Artist = song.Credit,  // Credit字段相当于Artist
-                        Album = "",             // GameAudioInfo没有Album字段
-                        Duration = 0,
-                        Enabled = true,
-                        Tags = new List<string>(),
-                        FileModifiedAt = fileInfo.LastWriteTime,
-                        UUID = song.UUID  // ✅ 保存UUID
-                    });
+                        return metadata.DisplayName;
+                    }
                 }
-
-                // 保存JSON
-                var json = JsonConvert.SerializeObject(_cacheData, Formatting.Indented);
-                File.WriteAllText(_playlistJsonPath, json);
-
-                BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogInfo($"[Playlist] 缓存生成成功: {_playlistJsonPath}");
             }
             catch (Exception ex)
             {
-                BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogError($"[Playlist] 缓存生成失败: {ex}");
+                BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework")
+                    .LogWarning($"[Playlist] 读取album.json失败: {ex.Message}");
             }
+            return defaultName;
         }
 
         /// <summary>
-        /// 检查目录是否有更新
-        /// </summary>
-        public bool HasDirectoryChanged()
-        {
-            if (_cacheData == null)
-                return true;
-
-            var directoryInfo = new DirectoryInfo(_directoryPath);
-            return directoryInfo.LastWriteTime > _cacheData.LastModified;
-        }
-
-        /// <summary>
-        /// 检查是否需要强制重新扫描（标志文件不存在）
-        /// </summary>
-        private bool ShouldForceRescan()
-        {
-            // 检查当前歌单目录的标志文件
-            return !File.Exists(_rescanFlagPath);
-        }
-
-        /// <summary>
-        /// 创建标志文件，表示已完成扫描
+        /// 创建重扫描标记文件
         /// </summary>
         private void CreateRescanFlag()
         {
             try
             {
-                File.WriteAllText(_rescanFlagPath,
+                File.WriteAllText(RescanFlagPath,
                     $"# ChillPatcher Playlist Scan Flag\n" +
                     $"# 此文件标识该歌单已完成扫描\n" +
-                    $"# 删除此文件后，下次启动将强制重新扫描并添加新歌曲\n" +
-                    $"# 已存在的歌曲UUID不会改变\n" +
-                    $"#\n" +
+                    $"# 删除此文件后，下次启动将重新扫描\n" +
                     $"# Last scanned: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n");
             }
             catch (Exception ex)
             {
-                BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogWarning(
-                    $"[Playlist] 创建标志文件失败 '{_rescanFlagPath}': {ex.Message}");
+                BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework")
+                    .LogWarning($"[Playlist] 创建标志文件失败: {ex.Message}");
             }
         }
 
         /// <summary>
-        /// 增量扫描：合并现有缓存和新文件
+        /// 注册专辑到AlbumManager
         /// </summary>
-        private async Task<List<GameAudioInfo>> IncrementalScan()
+        private void RegisterAlbumsToManager()
         {
-            var songs = new List<GameAudioInfo>();
-            var existingUUIDs = new Dictionary<string, CachedSongData>();
+            var albumManager = AlbumManager.Instance;
+            if (albumManager == null) return;
+
+            var db = CustomPlaylistDataManager.Instance;
             
-            // 构建现有歌曲的UUID映射（文件名 -> CachedSongData）
-            foreach (var cachedSong in _cacheData.Songs)
+            foreach (var albumId in _registeredAlbumIds)
             {
-                existingUUIDs[cachedSong.FileName.ToLower()] = cachedSong;
+                var albumInfo = db?.GetDatabase()?.GetAlbum(albumId);
+                if (!albumInfo.HasValue) continue;
+
+                var songUUIDs = db?.GetDatabase()?.GetSongsByAlbum(albumId)
+                    .Select(s => s.UUID)
+                    .ToList() ?? new List<string>();
+
+                albumManager.RegisterAlbum(
+                    albumId,
+                    albumInfo.Value.displayName,
+                    CustomTagId,  // 使用 CustomTagId (playlist_{Id}) 而不是 Id
+                    albumInfo.Value.directoryPath,
+                    songUUIDs
+                );
             }
-
-            // 扫描当前目录的所有音频文件
-            var currentFiles = Directory.GetFiles(_directoryPath)
-                .Where(f => _audioLoader.IsSupportedFormat(f))
-                .ToList();
-
-            BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogInfo(
-                $"[Playlist] 发现 {currentFiles.Count} 个音频文件，缓存中有 {_cacheData.Songs.Count} 首歌曲");
-
-            int newCount = 0;
-            int existingCount = 0;
-
-            foreach (var filePath in currentFiles)
-            {
-                var fileName = Path.GetFileName(filePath);
-                var fileNameLower = fileName.ToLower();
-
-                string uuid;
-                CachedSongData cachedData = null;
-
-                // 检查是否已存在于缓存中
-                if (existingUUIDs.TryGetValue(fileNameLower, out cachedData))
-                {
-                    // 使用现有UUID
-                    uuid = cachedData.UUID;
-                    if (string.IsNullOrEmpty(uuid))
-                    {
-                        // 旧缓存没有UUID，分配新的
-                        uuid = Guid.NewGuid().ToString();
-                        cachedData.UUID = uuid;
-                        BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogInfo(
-                            $"[Playlist] 为现有歌曲分配UUID: {fileName} -> {uuid}");
-                    }
-                    existingCount++;
-                }
-                else
-                {
-                    // 新文件，分配新UUID
-                    uuid = Guid.NewGuid().ToString();
-                    newCount++;
-                    BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogInfo(
-                        $"[Playlist] 发现新歌曲: {fileName} -> {uuid}");
-                }
-
-                try
-                {
-                    var audioInfo = await _audioLoader.LoadFromFile(filePath, uuid);
-
-                    if (audioInfo != null)
-                    {
-                        // 如果有缓存数据，使用缓存的元数据
-                        if (cachedData != null)
-                        {
-                            if (!string.IsNullOrEmpty(cachedData.Title))
-                                audioInfo.Title = cachedData.Title;
-                            if (!string.IsNullOrEmpty(cachedData.Artist))
-                                audioInfo.Credit = cachedData.Artist;
-                        }
-
-                        songs.Add(audioInfo);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogError(
-                        $"[Playlist] 加载歌曲失败 '{fileName}': {ex.Message}");
-                }
-            }
-
-            BepInEx.Logging.Logger.CreateLogSource("ChillUIFramework").LogInfo(
-                $"[Playlist] 增量扫描完成: 新增 {newCount} 首，保留 {existingCount} 首");
-
-            return songs;
         }
 
         /// <summary>
-        /// 释放资源并取消注册自定义Tag
+        /// 注销所有专辑
+        /// </summary>
+        private void UnregisterAllAlbums()
+        {
+            var albumManager = AlbumManager.Instance;
+            if (albumManager == null) return;
+
+            foreach (var albumId in _registeredAlbumIds)
+            {
+                albumManager.UnregisterAlbum(albumId);
+            }
+            _registeredAlbumIds.Clear();
+        }
+
+        /// <summary>
+        /// 释放资源
         /// </summary>
         public void Dispose()
         {
+            UnregisterAllAlbums();
+
             if (!string.IsNullOrEmpty(CustomTagId))
             {
                 CustomTagManager.Instance.UnregisterTag(CustomTagId);
             }
         }
+
+        /// <summary>
+        /// 从音频文件直接读取艺术家信息
+        /// </summary>
+        private string GetArtistFromFile(string filePath)
+        {
+            try
+            {
+                using (var file = TagLib.File.Create(filePath))
+                {
+                    // 优先使用 AlbumArtists，然后是 Performers
+                    if (file.Tag.AlbumArtists != null && file.Tag.AlbumArtists.Length > 0)
+                    {
+                        return string.Join(", ", file.Tag.AlbumArtists);
+                    }
+                    if (file.Tag.Performers != null && file.Tag.Performers.Length > 0)
+                    {
+                        return string.Join(", ", file.Tag.Performers);
+                    }
+                    // 回退到 FirstPerformer
+                    return file.Tag.FirstPerformer;
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
     }
 }
-

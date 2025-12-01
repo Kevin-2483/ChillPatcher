@@ -33,7 +33,6 @@ namespace ChillPatcher
         // 文件夹歌单设置
         public static ConfigEntry<bool> EnableFolderPlaylists { get; private set; }
         public static ConfigEntry<string> PlaylistRootFolder { get; private set; }
-        public static ConfigEntry<int> PlaylistRecursionDepth { get; private set; }
         public static ConfigEntry<bool> AutoGeneratePlaylistJson { get; private set; }
         public static ConfigEntry<bool> EnablePlaylistCache { get; private set; }
         public static ConfigEntry<bool> HideEmptyTags { get; private set; }
@@ -178,22 +177,15 @@ namespace ChillPatcher
                 "playlist",
                 "歌单根目录路径\n" +
                 "相对路径基于游戏根目录（.dll所在目录）\n" +
-                "默认：playlist（与ChillPatcher.dll同级的playlist文件夹）"
-            );
-
-            PlaylistRecursionDepth = config.Bind(
-                "Playlist",
-                "RecursionDepth",
-                3,
-                new ConfigDescription(
-                    "目录递归扫描深度\n" +
-                    "0 = 仅扫描根目录\n" +
-                    "1 = 扫描根目录及其一级子目录\n" +
-                    "2 = 扫描两级子目录\n" +
-                    "3 = 扫描三级子目录（默认）\n" +
-                    "建议范围：0-5",
-                    new AcceptableValueRange<int>(0, 10)
-                )
+                "默认：playlist（与ChillPatcher.dll同级的playlist文件夹）\n" +
+                "目录结构：\n" +
+                "  playlist/\n" +
+                "    ├─ default/        ← 默认歌单\n" +
+                "    ├─ 歌单A/          ← 一级子文件夹作为歌单\n" +
+                "    │   ├─ 专辑1/     ← 二级子文件夹作为专辑\n" +
+                "    │   └─ 专辑2/\n" +
+                "    └─ 歌单B/\n" +
+                "注意：根目录的音频文件会自动移动到default文件夹"
             );
 
             AutoGeneratePlaylistJson = config.Bind(
@@ -284,7 +276,6 @@ namespace ChillPatcher
             if (!string.IsNullOrEmpty(RimeUserDataPath.Value))
                 Plugin.Logger.LogInfo($"  - Rime用户目录: {RimeUserDataPath.Value}");
             Plugin.Logger.LogInfo($"  - 歌单根目录: {PlaylistRootFolder.Value}");
-            Plugin.Logger.LogInfo($"  - 递归深度: {PlaylistRecursionDepth.Value}");
             Plugin.Logger.LogInfo($"  - 自动生成JSON: {AutoGeneratePlaylistJson.Value}");
             Plugin.Logger.LogInfo($"  - 启用缓存: {EnablePlaylistCache.Value}");
             Plugin.Logger.LogInfo($"  - 隐藏空Tag: {HideEmptyTags.Value}");

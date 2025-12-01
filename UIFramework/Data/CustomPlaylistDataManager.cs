@@ -14,8 +14,25 @@ namespace ChillPatcher.UIFramework.Data
         private static CustomPlaylistDataManager _instance;
         public static CustomPlaylistDataManager Instance => _instance;
 
+        // 需要清理的旧文件模式
+        private static readonly string[] LEGACY_FILE_PATTERNS = new[]
+        {
+            "playlist.json",
+            "album.json", 
+            "!rescan",           // 旧的重扫描标记
+            "!rescan_playlist",  // 当前版本的重扫描标记
+            ".playlist_cache.json",
+            "playlist_cache.json"
+        };
+
         private PlaylistDatabase _database;
         private readonly string _databasePath;
+        private readonly string _rootDirectory;
+
+        /// <summary>
+        /// 是否需要完整重扫描（数据库升级或恢复后）
+        /// </summary>
+        public bool NeedsFullRescan { get; private set; }
 
         /// <summary>
         /// 初始化数据管理器
@@ -29,15 +46,184 @@ namespace ChillPatcher.UIFramework.Data
             }
 
             var dbPath = Path.Combine(rootDirectory, ".playlist_data.db");
-            _instance = new CustomPlaylistDataManager(dbPath);
+            _instance = new CustomPlaylistDataManager(rootDirectory, dbPath);
         }
 
-        private CustomPlaylistDataManager(string databasePath)
+        private CustomPlaylistDataManager(string rootDirectory, string databasePath)
         {
+            _rootDirectory = rootDirectory;
             _databasePath = databasePath;
-            _database = new PlaylistDatabase(databasePath);
             
-            BepInEx.Logging.Logger.CreateLogSource("CustomPlaylistData").LogInfo($"数据管理器初始化成功: {databasePath}");
+            InitializeDatabase();
+        }
+
+        /// <summary>
+        /// 初始化数据库（带损坏恢复）
+        /// </summary>
+        private void InitializeDatabase()
+        {
+            var logger = BepInEx.Logging.Logger.CreateLogSource("CustomPlaylistData");
+            
+            try
+            {
+                _database = new PlaylistDatabase(_databasePath);
+                
+                // 检查数据库是否需要完整重扫描（版本升级）
+                if (_database.NeedsFullRescan)
+                {
+                    logger.LogWarning("检测到旧版本数据库，需要清理旧文件并重新扫描");
+                    CleanupLegacyFiles(_rootDirectory, 3);
+                    NeedsFullRescan = true;
+                }
+                
+                logger.LogInfo($"数据管理器初始化成功: {_databasePath}");
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"数据库初始化失败: {ex.Message}");
+                logger.LogWarning("尝试删除损坏的数据库并重建...");
+                
+                // 尝试恢复
+                if (TryRecoverDatabase())
+                {
+                    logger.LogInfo("数据库恢复成功，需要重新扫描所有歌单");
+                }
+                else
+                {
+                    logger.LogError("数据库恢复失败");
+                    throw;
+                }
+            }
+        }
+
+        /// <summary>
+        /// 尝试恢复损坏的数据库
+        /// </summary>
+        private bool TryRecoverDatabase()
+        {
+            var logger = BepInEx.Logging.Logger.CreateLogSource("CustomPlaylistData");
+            
+            try
+            {
+                // 1. 关闭现有连接（如果有）
+                _database?.Dispose();
+                _database = null;
+                
+                // 2. 删除损坏的数据库文件
+                if (File.Exists(_databasePath))
+                {
+                    // SQLite 可能有 -wal 和 -shm 文件
+                    var walPath = _databasePath + "-wal";
+                    var shmPath = _databasePath + "-shm";
+                    
+                    File.Delete(_databasePath);
+                    if (File.Exists(walPath)) File.Delete(walPath);
+                    if (File.Exists(shmPath)) File.Delete(shmPath);
+                    
+                    logger.LogInfo("已删除损坏的数据库文件");
+                }
+                
+                // 3. 清理所有旧文件
+                CleanupLegacyFiles(_rootDirectory, 3);
+                
+                // 4. 重新创建数据库
+                _database = new PlaylistDatabase(_databasePath);
+                NeedsFullRescan = true;
+                
+                return true;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"恢复数据库失败: {ex}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 递归清理旧文件（JSON、重扫描标记等）
+        /// </summary>
+        /// <param name="directory">起始目录</param>
+        /// <param name="maxDepth">最大递归深度</param>
+        public void CleanupLegacyFiles(string directory, int maxDepth)
+        {
+            if (maxDepth < 0 || !Directory.Exists(directory))
+                return;
+
+            var logger = BepInEx.Logging.Logger.CreateLogSource("CustomPlaylistData");
+            int deletedCount = 0;
+
+            try
+            {
+                // 删除当前目录的旧文件
+                foreach (var pattern in LEGACY_FILE_PATTERNS)
+                {
+                    var filePath = Path.Combine(directory, pattern);
+                    if (File.Exists(filePath))
+                    {
+                        try
+                        {
+                            File.Delete(filePath);
+                            deletedCount++;
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning($"删除旧文件失败 '{filePath}': {ex.Message}");
+                        }
+                    }
+                }
+
+                // 递归处理子目录
+                if (maxDepth > 0)
+                {
+                    foreach (var subDir in Directory.GetDirectories(directory))
+                    {
+                        CleanupLegacyFiles(subDir, maxDepth - 1);
+                    }
+                }
+
+                if (deletedCount > 0)
+                {
+                    logger.LogInfo($"清理了 {deletedCount} 个旧文件: {directory}");
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"清理目录失败 '{directory}': {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 获取底层数据库实例
+        /// </summary>
+        public PlaylistDatabase GetDatabase() => _database;
+
+        /// <summary>
+        /// 清理不存在的歌单数据
+        /// 在加载歌单列表后调用，传入当前有效的歌单ID列表
+        /// </summary>
+        public void CleanupStalePlaylistData(IEnumerable<string> validPlaylistIds)
+        {
+            var logger = BepInEx.Logging.Logger.CreateLogSource("CustomPlaylistData");
+            var validSet = new HashSet<string>(validPlaylistIds);
+            
+            // 获取数据库中的所有歌单ID
+            var dbPlaylistIds = _database.GetAllPlaylistIds();
+            
+            int cleanedCount = 0;
+            foreach (var playlistId in dbPlaylistIds)
+            {
+                if (!validSet.Contains(playlistId))
+                {
+                    logger.LogInfo($"清理不存在的歌单数据: {playlistId}");
+                    _database.DeletePlaylist(playlistId);
+                    cleanedCount++;
+                }
+            }
+            
+            if (cleanedCount > 0)
+            {
+                logger.LogInfo($"共清理 {cleanedCount} 个不存在的歌单");
+            }
         }
 
         #region 收藏管理
@@ -250,6 +436,44 @@ namespace ChillPatcher.UIFramework.Data
             {
                 return AddExcluded(tagId, songUuid);
             }
+        }
+
+        /// <summary>
+        /// 批量添加到排除列表
+        /// </summary>
+        public int AddExcludedBatch(string tagId, IEnumerable<string> songUuids)
+        {
+            if (string.IsNullOrEmpty(tagId) || songUuids == null)
+                return 0;
+
+            var result = _database.AddExcludedBatch(tagId, songUuids);
+
+            if (result > 0)
+            {
+                BepInEx.Logging.Logger.CreateLogSource("CustomPlaylistData")
+                    .LogInfo($"批量添加到排除列表: Tag={tagId}, Count={result}");
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 批量从排除列表移除
+        /// </summary>
+        public int RemoveExcludedBatch(string tagId, IEnumerable<string> songUuids)
+        {
+            if (string.IsNullOrEmpty(tagId) || songUuids == null)
+                return 0;
+
+            var result = _database.RemoveExcludedBatch(tagId, songUuids);
+
+            if (result > 0)
+            {
+                BepInEx.Logging.Logger.CreateLogSource("CustomPlaylistData")
+                    .LogInfo($"批量从排除列表移除: Tag={tagId}, Count={result}");
+            }
+
+            return result;
         }
 
         #endregion

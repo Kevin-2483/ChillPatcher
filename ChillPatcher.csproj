@@ -19,6 +19,22 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Embedded Resources -->
+    <EmbeddedResource Include="defaultcover.png">
+      <LogicalName>ChillPatcher.Resources.defaultcover.png</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="gamecover1.jpg">
+      <LogicalName>ChillPatcher.Resources.gamecover1.jpg</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="gamecover2.jpg">
+      <LogicalName>ChillPatcher.Resources.gamecover2.jpg</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="gamecover3.png">
+      <LogicalName>ChillPatcher.Resources.gamecover3.png</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- NuGet Packages -->
     <PackageReference Include="TagLibSharp" Version="2.3.0" />
     <PackageReference Include="System.Data.SQLite.Core" Version="1.0.118" />
@@ -77,6 +93,10 @@
     </Reference>
     <Reference Include="UnityEngine.ImageConversionModule">
       <HintPath>F:\SteamLibrary\steamapps\common\wallpaper_engine\projects\myprojects\chill_with_you\Chill With You_Data\Managed\UnityEngine.ImageConversionModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>F:\SteamLibrary\steamapps\common\wallpaper_engine\projects\myprojects\chill_with_you\Chill With You_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
   </ItemGroup>

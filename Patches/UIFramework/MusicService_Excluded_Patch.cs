@@ -10,6 +10,11 @@ namespace ChillPatcher.Patches.UIFramework
     public class MusicService_Excluded_Patch
     {
         /// <summary>
+        /// 歌曲排除状态变化事件
+        /// </summary>
+        public static event System.Action<string, bool> OnSongExcludedChanged;  // (songUUID, isExcluded)
+
+        /// <summary>
         /// Patch ExcludeFromPlaylist - 排除歌曲
         /// </summary>
         [HarmonyPatch("ExcludeFromPlaylist")]
@@ -36,6 +41,13 @@ namespace ChillPatcher.Patches.UIFramework
                         {
                             // 使用独立数据库保存
                             __result = manager.AddExcluded(tagId, gameAudioInfo.UUID);
+                            
+                            // 触发状态变化事件
+                            if (__result)
+                            {
+                                OnSongExcludedChanged?.Invoke(gameAudioInfo.UUID, true);
+                            }
+                            
                             return false; // 跳过原方法
                         }
                     }
@@ -78,6 +90,13 @@ namespace ChillPatcher.Patches.UIFramework
                         {
                             // 使用独立数据库移除
                             __result = manager.RemoveExcluded(tagId, gameAudioInfo.UUID);
+                            
+                            // 触发状态变化事件
+                            if (__result)
+                            {
+                                OnSongExcludedChanged?.Invoke(gameAudioInfo.UUID, false);
+                            }
+                            
                             return false; // 跳过原方法
                         }
                     }

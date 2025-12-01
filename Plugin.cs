@@ -109,21 +109,27 @@ namespace ChillPatcher
                 var rootPath = PlaylistDirectoryScanner.GetAbsolutePath(PluginConfig.PlaylistRootFolder.Value);
                 
                 logger.LogInfo($"[Playlist] 根目录: {rootPath}");
-                logger.LogInfo($"[Playlist] 递归深度: {PluginConfig.PlaylistRecursionDepth.Value}");
                 
                 // ✅ 初始化数据库
                 UIFramework.Data.CustomPlaylistDataManager.Initialize(rootPath);
                 logger.LogInfo($"[Playlist] 数据库已初始化");
                 
-                // 创建扫描器
+                // ✅ 初始化专辑管理器
+                AlbumManager.Initialize();
+                logger.LogInfo($"[Playlist] 专辑管理器已初始化");
+                
+                // 创建扫描器（不再需要递归深度参数）
                 var playlistScanner = new PlaylistDirectoryScanner(
                     rootPath,
-                    PluginConfig.PlaylistRecursionDepth.Value,
                     ChillUIFramework.Music.AudioLoader
                 );
                 
                 // 扫描所有歌单
                 var playlists = playlistScanner.ScanAllPlaylists();
+                
+                // ✅ 清理不存在的歌单数据（文件夹被重命名或删除的情况）
+                var validPlaylistIds = playlists.Select(p => p.Id).ToList();
+                UIFramework.Data.CustomPlaylistDataManager.Instance?.CleanupStalePlaylistData(validPlaylistIds);
                 
                 // 注册到框架
                 var registry = ChillUIFramework.Music.PlaylistRegistry;

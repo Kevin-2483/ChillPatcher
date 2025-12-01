@@ -29,6 +29,18 @@ namespace ChillPatcher
         /// 将播放列表按钮的图标替换为当前播放音乐的封面
         /// </summary>
         public static ConfigEntry<bool> EnableAlbumArtDisplay { get; private set; }
+
+        /// <summary>
+        /// 是否在播放列表中显示专辑分隔（默认：开启）
+        /// 仅在虚拟滚动启用时有效
+        /// </summary>
+        public static ConfigEntry<bool> EnableAlbumSeparators { get; private set; }
+        
+        /// <summary>
+        /// 是否启用UI重排列（默认：关闭）
+        /// 重新排列主界面按钮布局
+        /// </summary>
+        public static ConfigEntry<bool> EnableUIRearrange { get; private set; }
         
         // ========== 高级配置 ==========
         
@@ -66,6 +78,20 @@ namespace ChillPatcher
                 "EnableAlbumArtDisplay",
                 true,  // 默认开启
                 "Display album art on playlist toggle button"
+            );
+
+            EnableAlbumSeparators = config.Bind(
+                "Features",
+                "EnableAlbumSeparators",
+                true,  // 默认开启
+                "Display album separators in playlist (requires virtual scroll)"
+            );
+            
+            EnableUIRearrange = config.Bind(
+                "Features",
+                "EnableUIRearrange",
+                true,  // 默认开启
+                "Rearrange main UI buttons layout"
             );
             
             // 高级配置

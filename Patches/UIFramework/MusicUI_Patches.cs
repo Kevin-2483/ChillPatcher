@@ -1,8 +1,10 @@
 using Bulbul;
 using ChillPatcher.UIFramework;
+using ChillPatcher.UIFramework.Music;
 using HarmonyLib;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using UnityEngine;
 
 namespace ChillPatcher.Patches.UIFramework
@@ -15,6 +17,7 @@ namespace ChillPatcher.Patches.UIFramework
     public class MusicUI_VirtualScroll_Patch
     {
         private static bool _componentsInitialized = false;
+        private static bool _mixedComponentsInitialized = false;
 
         /// <summary>
         /// Patch MusicUI.Setup - 初始化虚拟滚动组件
@@ -24,7 +27,7 @@ namespace ChillPatcher.Patches.UIFramework
         [HarmonyPrefix]
         static void Setup_Prefix(MusicUI __instance)
         {
-            if (_componentsInitialized || !UIFrameworkConfig.EnableVirtualScroll.Value)
+            if (!UIFrameworkConfig.EnableVirtualScroll.Value)
                 return;
 
             try
@@ -48,15 +51,42 @@ namespace ChillPatcher.Patches.UIFramework
                     return;
                 }
 
-                // 初始化虚拟滚动控制器
-                var virtualScroll = ChillUIFramework.Music.VirtualScroll as ChillPatcher.UIFramework.Music.VirtualScrollController;
-                if (virtualScroll != null)
+                var musicManager = ChillUIFramework.Music as MusicUIManager;
+                
+                // 根据配置初始化对应的控制器
+                if (UIFrameworkConfig.EnableAlbumSeparators.Value)
                 {
-                    virtualScroll.ItemHeight = 60f; // 从配置读取
-                    virtualScroll.BufferCount = UIFrameworkConfig.VirtualScrollBufferSize.Value;
-                    virtualScroll.InitializeComponents(scrollRect, playListButtonsPrefab, playListButtonsParent.transform);
-                    _componentsInitialized = true;
-                    Plugin.Log.LogInfo("VirtualScrollController initialized with MusicUI components (Prefix)");
+                    // 使用混合虚拟滚动（支持专辑分隔）
+                    if (!_mixedComponentsInitialized && musicManager?.MixedVirtualScroll != null)
+                    {
+                        musicManager.MixedVirtualScroll.BufferCount = UIFrameworkConfig.VirtualScrollBufferSize.Value;
+                        musicManager.MixedVirtualScroll.InitializeComponents(scrollRect, playListButtonsPrefab, playListButtonsParent.transform);
+                        
+                        // 订阅专辑切换事件
+                        musicManager.MixedVirtualScroll.OnAlbumToggle += OnAlbumToggleHandler;
+                        
+                        // 订阅单曲排除状态变化事件
+                        MusicService_Excluded_Patch.OnSongExcludedChanged += OnSongExcludedChangedHandler;
+                        
+                        _mixedComponentsInitialized = true;
+                        Plugin.Log.LogInfo("MixedVirtualScrollController initialized (with album separators)");
+                    }
+                }
+                else
+                {
+                    // 使用普通虚拟滚动
+                    if (!_componentsInitialized)
+                    {
+                        var virtualScroll = ChillUIFramework.Music.VirtualScroll as VirtualScrollController;
+                        if (virtualScroll != null)
+                        {
+                            virtualScroll.ItemHeight = 60f;
+                            virtualScroll.BufferCount = UIFrameworkConfig.VirtualScrollBufferSize.Value;
+                            virtualScroll.InitializeComponents(scrollRect, playListButtonsPrefab, playListButtonsParent.transform);
+                            _componentsInitialized = true;
+                            Plugin.Log.LogInfo("VirtualScrollController initialized (no album separators)");
+                        }
+                    }
                 }
             }
             catch (System.Exception ex)
@@ -80,13 +110,6 @@ namespace ChillPatcher.Patches.UIFramework
 
             try
             {
-                var virtualScroll = ChillUIFramework.Music.VirtualScroll as ChillPatcher.UIFramework.Music.VirtualScrollController;
-                if (virtualScroll == null)
-                {
-                    Plugin.Log.LogWarning("VirtualScroll is null, falling back to original method");
-                    return true; // 执行原方法
-                }
-
                 // 获取_facilityMusic
                 var facilityMusic = Traverse.Create(__instance)
                     .Field("_facilityMusic")
@@ -103,21 +126,34 @@ namespace ChillPatcher.Patches.UIFramework
                     .Field("_playingList")
                     .GetValue<ObservableCollections.IReadOnlyObservableList<Bulbul.GameAudioInfo>>();
 
-                if (playingList != null)
+                if (playingList == null)
                 {
-                    
-                    // 设置FacilityMusic引用
-                    virtualScroll.SetFacilityMusic(facilityMusic);
-                    
-                    // 总是设置数据源（即使Count=0，也要清空旧项）
-                    virtualScroll.SetDataSource(playingList);
-                    
+                    Traverse.Create(__instance).Field("isPlaylistDirty").SetValue(false);
+                    return false;
+                }
+
+                var musicManager = ChillUIFramework.Music as MusicUIManager;
+
+                if (UIFrameworkConfig.EnableAlbumSeparators.Value && musicManager?.MixedVirtualScroll != null)
+                {
+                    // 使用混合虚拟滚动
+                    _ = ViewPlayListWithAlbumSeparators(__instance, facilityMusic, playingList, musicManager);
+                }
+                else
+                {
+                    // 使用普通虚拟滚动
+                    var virtualScroll = ChillUIFramework.Music.VirtualScroll as VirtualScrollController;
+                    if (virtualScroll != null)
+                    {
+                        virtualScroll.SetFacilityMusic(facilityMusic);
+                        virtualScroll.SetDataSource(playingList);
+                    }
                 }
 
                 // **关键：清除dirty标志，防止无限循环**
                 Traverse.Create(__instance).Field("isPlaylistDirty").SetValue(false);
 
-                // 阻止原方法执行（我们用虚拟滚动替代）
+                // 阻止原方法执行
                 return false;
             }
             catch (System.Exception ex)
@@ -127,45 +163,127 @@ namespace ChillPatcher.Patches.UIFramework
             }
         }
 
-        // TODO: OnChangeMusic Patch需要正确的MusicChangeKind类型
-        // 暂时注释，等确认正确的类型签名后再启用
-        /*
         /// <summary>
-        /// Patch MusicUI.OnChangeMusic - 滚动到当前播放的歌曲
+        /// 使用带专辑分隔的方式渲染播放列表
         /// </summary>
-        [HarmonyPatch(typeof(MusicUI), "OnChangeMusic")]
-        [HarmonyPostfix]
-        static void OnChangeMusic_Postfix(MusicUI __instance, string musicTitle)
+        private static async Task ViewPlayListWithAlbumSeparators(
+            MusicUI musicUI,
+            FacilityMusic facilityMusic, 
+            ObservableCollections.IReadOnlyObservableList<GameAudioInfo> playingList,
+            MusicUIManager musicManager)
         {
-            if (!UIFrameworkConfig.EnableVirtualScroll.Value || !ChillUIFramework.IsInitialized)
-                return;
-
             try
             {
-                var virtualScroll = ChillUIFramework.Music.VirtualScroll;
-                var playingList = Traverse.Create(__instance)
-                    .Field("_playingList")
-                    .GetValue<ObservableCollections.IReadOnlyObservableList<Bulbul.GameAudioInfo>>();
+                var mixedScroll = musicManager.MixedVirtualScroll;
+                mixedScroll.SetFacilityMusic(facilityMusic);
 
-                if (virtualScroll != null && playingList != null)
+                // 构建带专辑头的列表（根据歌曲UUID查找专辑信息）
+                var items = await musicManager.PlaylistListBuilder.BuildWithAlbumHeaders(
+                    playingList.ToList(),
+                    loadCovers: true
+                );
+
+                mixedScroll.SetDataSource(items);
+                
+                var albumCount = items.Count(i => i.ItemType == PlaylistItemType.AlbumHeader);
+                Plugin.Log.LogInfo($"Rendered playlist: {playingList.Count} songs, {albumCount} album headers");
+            }
+            catch (System.Exception ex)
+            {
+                Plugin.Log.LogError($"Error rendering playlist with album separators: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// 获取当前选中的歌单ID
+        /// </summary>
+        private static string GetCurrentPlaylistId()
+        {
+            // 尝试从CustomTagManager获取当前选中的标签
+            var tagManager = CustomTagManager.Instance;
+            if (tagManager == null)
+                return null;
+
+            // TODO: 需要跟踪当前选中的歌单
+            // 暂时返回null，使用简单列表
+            return null;
+        }
+
+        /// <summary>
+        /// 专辑切换事件处理器
+        /// </summary>
+        private static void OnAlbumToggleHandler(string albumId)
+        {
+            try
+            {
+                var albumManager = AlbumManager.Instance;
+                if (albumManager == null)
                 {
-                    // 找到当前播放歌曲的索引
-                    var index = playingList
-                        .Select((song, i) => new { song, i })
-                        .FirstOrDefault(x => x.song.Title == musicTitle)
-                        ?.i ?? -1;
+                    Plugin.Log.LogWarning("AlbumManager not initialized");
+                    return;
+                }
 
-                    if (index >= 0)
-                    {
-                        virtualScroll.ScrollToItem(index, smooth: true);
-                    }
+                // 获取专辑信息以得到 playlistId (tagId)
+                var albumInfo = albumManager.GetAlbum(albumId);
+                if (albumInfo == null)
+                {
+                    Plugin.Log.LogWarning($"Album not found: {albumId}");
+                    return;
+                }
+
+                var tagId = albumInfo.PlaylistId;
+                
+                // 切换专辑启用状态
+                bool newState = albumManager.ToggleAlbumEnabled(albumId, tagId);
+                Plugin.Log.LogInfo($"Album '{albumInfo.DisplayName}' toggled to {(newState ? "enabled" : "disabled")}");
+
+                // 刷新播放列表以更新显示
+                RefreshPlaylistDisplay();
+            }
+            catch (System.Exception ex)
+            {
+                Plugin.Log.LogError($"Error handling album toggle: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// 单曲排除状态变化事件处理器
+        /// </summary>
+        private static void OnSongExcludedChangedHandler(string songUUID, bool isExcluded)
+        {
+            try
+            {
+                Plugin.Log.LogDebug($"Song excluded state changed: {songUUID} -> {(isExcluded ? "excluded" : "included")}");
+                
+                // 刷新播放列表以更新专辑头的统计信息
+                RefreshPlaylistDisplay();
+            }
+            catch (System.Exception ex)
+            {
+                Plugin.Log.LogError($"Error handling song excluded change: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// 刷新播放列表显示
+        /// </summary>
+        private static void RefreshPlaylistDisplay()
+        {
+            try
+            {
+                // 触发 MusicUI 刷新播放列表
+                // 设置 isPlaylistDirty 标志，让下一帧自动刷新
+                var musicUI = UnityEngine.Object.FindObjectOfType<MusicUI>();
+                if (musicUI != null)
+                {
+                    Traverse.Create(musicUI).Field("isPlaylistDirty").SetValue(true);
+                    Plugin.Log.LogDebug("Playlist refresh triggered");
                 }
             }
             catch (System.Exception ex)
             {
-                Plugin.Log.LogError($"Error scrolling to current music: {ex}");
+                Plugin.Log.LogError($"Error refreshing playlist display: {ex}");
             }
         }
-        */
     }
 }
