@@ -842,6 +842,14 @@ namespace ChillPatcher.UIFramework.Music
         }
         
         /// <summary>
+        /// 获取历史中所有歌曲的 UUID 列表（用于保存）
+        /// </summary>
+        public List<string> GetHistoryUUIDs()
+        {
+            return _history.Select(a => a.UUID).ToList();
+        }
+        
+        /// <summary>
         /// 从 UUID 列表恢复队列
         /// </summary>
         public void RestoreFromUUIDs(IEnumerable<string> uuids, IReadOnlyList<GameAudioInfo> allMusic)
@@ -866,6 +874,64 @@ namespace ChillPatcher.UIFramework.Music
             }
             
             Plugin.Log.LogInfo($"[Queue] Restored {_queue.Count} songs from UUIDs");
+        }
+        
+        /// <summary>
+        /// 从 UUID 列表恢复历史
+        /// </summary>
+        public void RestoreHistoryFromUUIDs(IEnumerable<string> uuids, IReadOnlyList<GameAudioInfo> allMusic)
+        {
+            if (uuids == null || allMusic == null) return;
+            
+            _history.Clear();
+            
+            foreach (var uuid in uuids)
+            {
+                var audio = allMusic.FirstOrDefault(a => a.UUID == uuid);
+                if (audio != null)
+                {
+                    _history.Add(audio);
+                }
+            }
+            
+            Plugin.Log.LogInfo($"[Queue] Restored {_history.Count} history entries from UUIDs");
+        }
+        
+        /// <summary>
+        /// 恢复播放状态（队列、历史、位置等）
+        /// </summary>
+        public void RestoreFullState(
+            IEnumerable<string> queueUUIDs,
+            IEnumerable<string> historyUUIDs,
+            int playlistPosition,
+            int historyPosition,
+            int extendedSteps,
+            IReadOnlyList<GameAudioInfo> allMusic)
+        {
+            if (allMusic == null)
+            {
+                Plugin.Log.LogWarning("[Queue] Cannot restore state: allMusic is null");
+                return;
+            }
+            
+            // 恢复队列
+            if (queueUUIDs != null)
+            {
+                RestoreFromUUIDs(queueUUIDs, allMusic);
+            }
+            
+            // 恢复历史
+            if (historyUUIDs != null)
+            {
+                RestoreHistoryFromUUIDs(historyUUIDs, allMusic);
+            }
+            
+            // 恢复位置
+            PlaylistPosition = playlistPosition;
+            _historyPosition = historyPosition;
+            _extendedSteps = extendedSteps;
+            
+            Plugin.Log.LogInfo($"[Queue] Full state restored: Queue={_queue.Count}, History={_history.Count}, Position={playlistPosition}, HistoryPos={historyPosition}, ExtSteps={extendedSteps}");
         }
         
         #endregion

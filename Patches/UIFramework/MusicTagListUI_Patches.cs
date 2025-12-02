@@ -500,13 +500,13 @@ namespace ChillPatcher.Patches.UIFramework
                     btn.SetActive(false);
             }
             
-            // 创建队列操作按钮（直接添加到容器）
-            CreateQueueButtons(tagListContainer);
+            // 创建队列操作按钮（直接添加到容器）并获取按钮数量
+            int queueButtonCount = CreateQueueButtons(tagListContainer);
             
-            // 更新下拉框高度（2个按钮）
-            UpdateDropdownHeightForQueueMode(pulldown, 2);
+            // 更新下拉框高度（根据实际创建的按钮数量）
+            UpdateDropdownHeightForQueueMode(pulldown, queueButtonCount);
             
-            Plugin.Log.LogInfo("[TagListUI] Switched to queue mode");
+            Plugin.Log.LogInfo($"[TagListUI] Switched to queue mode with {queueButtonCount} buttons");
         }
         
         /// <summary>
@@ -583,8 +583,14 @@ namespace ChillPatcher.Patches.UIFramework
         /// <summary>
         /// 创建队列操作按钮（克隆原生Tag按钮样式）
         /// </summary>
-        private static void CreateQueueButtons(Transform container)
+        /// <summary>
+        /// 创建队列操作按钮
+        /// </summary>
+        /// <returns>创建的按钮数量</returns>
+        private static int CreateQueueButtons(Transform container)
         {
+            int buttonCount = 0;
+            
             // 如果已存在，先销毁
             if (_clearAllQueueButton != null)
             {
@@ -607,7 +613,7 @@ namespace ChillPatcher.Patches.UIFramework
             if (buttons == null || buttons.Length == 0)
             {
                 Plugin.Log.LogError("[CreateQueueButtons] No template button found");
-                return;
+                return buttonCount;
             }
             
             var templateButton = buttons[0];
@@ -620,6 +626,7 @@ namespace ChillPatcher.Patches.UIFramework
                 "清空全部队列",
                 OnClearAllQueueClicked
             );
+            if (_clearAllQueueButton != null) buttonCount++;
             
             // 创建"清空未来队列"按钮
             _clearFutureQueueButton = CreateQueueButtonFromTemplate(
@@ -629,6 +636,7 @@ namespace ChillPatcher.Patches.UIFramework
                 "清空未来队列",
                 OnClearFutureQueueClicked
             );
+            if (_clearFutureQueueButton != null) buttonCount++;
             
             // 创建"清空播放历史"按钮
             _clearHistoryButton = CreateQueueButtonFromTemplate(
@@ -638,10 +646,13 @@ namespace ChillPatcher.Patches.UIFramework
                 "清空播放历史",
                 OnClearHistoryClicked
             );
+            if (_clearHistoryButton != null) buttonCount++;
             
             // 强制刷新布局
             Canvas.ForceUpdateCanvases();
             LayoutRebuilder.ForceRebuildLayoutImmediate(container as RectTransform);
+            
+            return buttonCount;
         }
         
         /// <summary>

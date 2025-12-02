@@ -26,7 +26,8 @@ namespace ChillPatcher
                     "msvcp140.dll",
                     "concrt140.dll",
                     "SQLite.Interop.dll",
-                    "ChillFlacDecoder.dll"
+                    "ChillFlacDecoder.dll",
+                    "ChillSmtcBridge.dll"
                 };
 
                 foreach (var lib in libs)

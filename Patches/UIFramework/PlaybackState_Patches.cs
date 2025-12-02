@@ -7,6 +7,7 @@ namespace ChillPatcher.Patches.UIFramework
 {
     /// <summary>
     /// 播放状态恢复补丁 - 在游戏启动时恢复上次的播放状态
+    /// ✅ 使用 Publicizer 直接访问 private 字段（消除反射开销）
     /// </summary>
     [HarmonyPatch]
     public class PlaybackState_Patches
@@ -73,8 +74,15 @@ namespace ChillPatcher.Patches.UIFramework
         {
             try
             {
-                // 等待一帧，让游戏完成初始播放
-                await Cysharp.Threading.Tasks.UniTask.DelayFrame(2);
+                // 等待足够的帧数，让游戏完成初始播放和UI初始化
+                await Cysharp.Threading.Tasks.UniTask.DelayFrame(5);
+
+                // 首先恢复队列和历史
+                var allMusic = musicService.AllMusicList;
+                if (PlaybackStateManager.Instance.TryRestoreQueueAndHistory(allMusic))
+                {
+                    Plugin.Log.LogInfo("[PlaybackState] Restored queue and history");
+                }
 
                 var savedUUID = PlaybackStateManager.Instance.GetSavedSongUUID();
                 if (!string.IsNullOrEmpty(savedUUID))
@@ -82,6 +90,12 @@ namespace ChillPatcher.Patches.UIFramework
                     if (PlaybackStateManager.Instance.TryPlaySavedSong(musicService))
                     {
                         Plugin.Log.LogInfo($"[PlaybackState] Restored playback to saved song: {savedUUID}");
+                        
+                        // 等待几帧后刷新所有按钮的播放状态
+                        await Cysharp.Threading.Tasks.UniTask.DelayFrame(3);
+                        
+                        // 更新 FacilityMusic 的播放状态和 UI
+                        UpdateFacilityMusicPlayState(facility);
                     }
                     else
                     {
@@ -92,6 +106,41 @@ namespace ChillPatcher.Patches.UIFramework
             catch (Exception ex)
             {
                 Plugin.Log.LogError($"[PlaybackState] Error in DelayedPlaybackRestore: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 更新 FacilityMusic 的播放状态，包括 _mainState 和 MusicUI 的显示
+        /// ✅ 使用 Publicizer 直接访问 private 字段（消除反射开销）
+        /// </summary>
+        private static void UpdateFacilityMusicPlayState(FacilityMusic facility)
+        {
+            try
+            {
+                if (facility == null)
+                {
+                    Plugin.Log.LogWarning("[PlaybackState] FacilityMusic is null, cannot update play state");
+                    return;
+                }
+
+                // ✅ 直接访问 _mainState 字段（Publicizer 消除反射）
+                facility._mainState = FacilityMusic.MainState.Playing;
+                Plugin.Log.LogInfo("[PlaybackState] Set FacilityMusic._mainState to Playing");
+
+                // ✅ 直接访问 _musicUI 字段并调用 OnPlayMusic()（Publicizer 消除反射）
+                if (facility._musicUI != null)
+                {
+                    facility._musicUI.OnPlayMusic();
+                    Plugin.Log.LogInfo("[PlaybackState] Called MusicUI.OnPlayMusic() to update UI");
+                }
+                else
+                {
+                    Plugin.Log.LogWarning("[PlaybackState] MusicUI is null");
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogError($"[PlaybackState] Error updating play state: {ex.Message}");
             }
         }
     }

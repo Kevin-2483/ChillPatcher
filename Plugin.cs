@@ -305,6 +305,17 @@ namespace ChillPatcher
         {
             Logger.LogInfo("OnApplicationQuit called - cleaning up...");
             
+            // 保存播放状态（队列和历史）
+            try
+            {
+                UIFramework.Music.PlaybackStateManager.Instance.ForceSave();
+                Logger.LogInfo("Playback state saved!");
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"Error saving playback state: {ex}");
+            }
+            
             // 清理键盘钩子
             KeyboardHookPatch.Cleanup();
             Logger.LogInfo("Keyboard hook cleanup completed!");

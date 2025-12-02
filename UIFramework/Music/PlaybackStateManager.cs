@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using Bulbul;
 using HarmonyLib;
@@ -39,6 +40,31 @@ namespace ChillPatcher.UIFramework.Music
         /// 保存时间
         /// </summary>
         public string SavedAt;
+
+        /// <summary>
+        /// 播放队列（UUID列表）
+        /// </summary>
+        public List<string> QueueUUIDs;
+
+        /// <summary>
+        /// 播放历史（UUID列表，最近播放的在前）
+        /// </summary>
+        public List<string> HistoryUUIDs;
+
+        /// <summary>
+        /// 播放列表位置
+        /// </summary>
+        public int PlaylistPosition;
+
+        /// <summary>
+        /// 历史位置指针
+        /// </summary>
+        public int HistoryPosition;
+
+        /// <summary>
+        /// 扩展步数
+        /// </summary>
+        public int ExtendedSteps;
     }
 
     /// <summary>
@@ -154,7 +180,25 @@ namespace ChillPatcher.UIFramework.Music
             _currentState.IsShuffle = musicService.IsShuffle;
             _currentState.IsRepeatOne = musicService.IsRepeatOneMusic;
 
+            // 保存队列和历史
+            SaveQueueAndHistory();
+
             SaveState();
+        }
+
+        /// <summary>
+        /// 保存队列和历史到当前状态
+        /// </summary>
+        private void SaveQueueAndHistory()
+        {
+            var queueManager = PlayQueueManager.Instance;
+            if (queueManager == null) return;
+
+            _currentState.QueueUUIDs = queueManager.Queue.Select(a => a.UUID).ToList();
+            _currentState.HistoryUUIDs = queueManager.History.Select(a => a.UUID).ToList();
+            _currentState.PlaylistPosition = queueManager.PlaylistPosition;
+            _currentState.HistoryPosition = queueManager.HistoryPosition;
+            _currentState.ExtendedSteps = queueManager.ExtendedSteps;
         }
 
         /// <summary>
@@ -206,13 +250,33 @@ namespace ChillPatcher.UIFramework.Music
         /// </summary>
         private string SerializeState(PlaybackState state)
         {
+            var queueJson = SerializeStringList(state.QueueUUIDs);
+            var historyJson = SerializeStringList(state.HistoryUUIDs);
+            
             return "{\n" +
                 $"  \"CurrentSongUUID\": \"{EscapeJson(state.CurrentSongUUID ?? "")}\",\n" +
                 $"  \"CurrentAudioTagValue\": {state.CurrentAudioTagValue},\n" +
                 $"  \"IsShuffle\": {state.IsShuffle.ToString().ToLower()},\n" +
                 $"  \"IsRepeatOne\": {state.IsRepeatOne.ToString().ToLower()},\n" +
-                $"  \"SavedAt\": \"{EscapeJson(state.SavedAt ?? "")}\"\n" +
+                $"  \"SavedAt\": \"{EscapeJson(state.SavedAt ?? "")}\",\n" +
+                $"  \"QueueUUIDs\": {queueJson},\n" +
+                $"  \"HistoryUUIDs\": {historyJson},\n" +
+                $"  \"PlaylistPosition\": {state.PlaylistPosition},\n" +
+                $"  \"HistoryPosition\": {state.HistoryPosition},\n" +
+                $"  \"ExtendedSteps\": {state.ExtendedSteps}\n" +
                 "}";
+        }
+
+        /// <summary>
+        /// 序列化字符串列表为 JSON 数组
+        /// </summary>
+        private string SerializeStringList(List<string> list)
+        {
+            if (list == null || list.Count == 0)
+                return "[]";
+            
+            var items = list.Select(s => $"\"{EscapeJson(s ?? "")}\"");
+            return "[" + string.Join(", ", items) + "]";
         }
 
         /// <summary>
@@ -227,6 +291,11 @@ namespace ChillPatcher.UIFramework.Music
             state.IsShuffle = ExtractBoolValue(json, "IsShuffle");
             state.IsRepeatOne = ExtractBoolValue(json, "IsRepeatOne");
             state.SavedAt = ExtractStringValue(json, "SavedAt");
+            state.QueueUUIDs = ExtractStringListValue(json, "QueueUUIDs");
+            state.HistoryUUIDs = ExtractStringListValue(json, "HistoryUUIDs");
+            state.PlaylistPosition = ExtractIntValue(json, "PlaylistPosition");
+            state.HistoryPosition = ExtractIntValue(json, "HistoryPosition");
+            state.ExtendedSteps = ExtractIntValue(json, "ExtendedSteps");
 
             return state;
         }
@@ -256,6 +325,49 @@ namespace ChillPatcher.UIFramework.Music
             var pattern = $"\"{key}\"\\s*:\\s*(true|false)";
             var match = System.Text.RegularExpressions.Regex.Match(json, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             return match.Success && match.Groups[1].Value.ToLower() == "true";
+        }
+
+        /// <summary>
+        /// 从 JSON 提取字符串数组
+        /// </summary>
+        private List<string> ExtractStringListValue(string json, string key)
+        {
+            var result = new List<string>();
+            try
+            {
+                // 匹配 "key": [...]
+                var pattern = $"\"{key}\"\\s*:\\s*\\[([^\\]]*)\\]";
+                var match = System.Text.RegularExpressions.Regex.Match(json, pattern);
+                if (match.Success)
+                {
+                    var arrayContent = match.Groups[1].Value;
+                    // 匹配所有引号中的字符串
+                    var itemPattern = "\"([^\"]*)\"";
+                    var itemMatches = System.Text.RegularExpressions.Regex.Matches(arrayContent, itemPattern);
+                    foreach (System.Text.RegularExpressions.Match itemMatch in itemMatches)
+                    {
+                        result.Add(UnescapeJson(itemMatch.Groups[1].Value));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"Failed to extract string list for key '{key}': {ex.Message}");
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// 反转义 JSON 字符串
+        /// </summary>
+        private string UnescapeJson(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            return value
+                .Replace("\\n", "\n")
+                .Replace("\\r", "\r")
+                .Replace("\\\"", "\"")
+                .Replace("\\\\", "\\");
         }
 
         /// <summary>
@@ -401,6 +513,91 @@ namespace ChillPatcher.UIFramework.Music
                 // 不重置状态，因为歌曲可能只是暂时被过滤掉了
                 return false;
             }
+        }
+
+        /// <summary>
+        /// 恢复队列和历史
+        /// </summary>
+        /// <param name="allMusic">所有音乐列表</param>
+        /// <returns>是否成功恢复</returns>
+        public bool TryRestoreQueueAndHistory(IReadOnlyList<GameAudioInfo> allMusic)
+        {
+            if (_currentState == null || allMusic == null || allMusic.Count == 0)
+            {
+                Logger.LogInfo("Cannot restore queue/history: no saved state or no music available");
+                return false;
+            }
+
+            var queueManager = PlayQueueManager.Instance;
+            if (queueManager == null)
+            {
+                Logger.LogWarning("PlayQueueManager not available");
+                return false;
+            }
+
+            // 检查是否有保存的队列或历史
+            bool hasQueue = _currentState.QueueUUIDs != null && _currentState.QueueUUIDs.Count > 0;
+            bool hasHistory = _currentState.HistoryUUIDs != null && _currentState.HistoryUUIDs.Count > 0;
+
+            if (!hasQueue && !hasHistory)
+            {
+                Logger.LogInfo("No saved queue or history to restore");
+                return false;
+            }
+
+            try
+            {
+                queueManager.RestoreFullState(
+                    _currentState.QueueUUIDs,
+                    _currentState.HistoryUUIDs,
+                    _currentState.PlaylistPosition,
+                    _currentState.HistoryPosition,
+                    _currentState.ExtendedSteps,
+                    allMusic
+                );
+
+                Logger.LogInfo($"Restored queue ({_currentState.QueueUUIDs?.Count ?? 0} items) and history ({_currentState.HistoryUUIDs?.Count ?? 0} items)");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning($"Failed to restore queue/history: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 获取保存的队列 UUID 列表
+        /// </summary>
+        public List<string> GetSavedQueueUUIDs()
+        {
+            return _currentState?.QueueUUIDs;
+        }
+
+        /// <summary>
+        /// 获取保存的历史 UUID 列表
+        /// </summary>
+        public List<string> GetSavedHistoryUUIDs()
+        {
+            return _currentState?.HistoryUUIDs;
+        }
+
+        /// <summary>
+        /// 强制保存当前状态（用于游戏退出时）
+        /// </summary>
+        public void ForceSave()
+        {
+            if (_currentState == null)
+            {
+                _currentState = new PlaybackState();
+            }
+
+            // 保存队列和历史
+            SaveQueueAndHistory();
+
+            // 保存到文件
+            SaveState();
+            Logger.LogInfo("Force saved playback state");
         }
 
         /// <summary>

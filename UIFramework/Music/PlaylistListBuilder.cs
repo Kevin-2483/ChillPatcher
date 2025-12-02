@@ -317,7 +317,7 @@ namespace ChillPatcher.UIFramework.Music
                 }
                 else
                 {
-                    gameCover = _coverLoader.LoadGameCoverFromEmbeddedResource((int)nativeTag);
+                    gameCover = GetCoverLoader().LoadGameCoverFromEmbeddedResource((int)nativeTag);
                     artistName = "Chill With You Game";
                 }
                 

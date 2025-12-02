@@ -19,7 +19,8 @@ namespace ChillPatcher
             { "Rime", 1 },
             { "Playlist", 1 },
             { "UI", 2 },        // v2: TagDropdownHeightOffset 默认值从50改为80
-            { "Maintenance", 1 }
+            { "Maintenance", 1 },
+            { "Audio", 1 }      // 音频自动静音功能
         };
         
         // 配置版本存储
@@ -34,6 +35,7 @@ namespace ChillPatcher
         private static ConfigEntry<int> _playlistVersion;
         private static ConfigEntry<int> _uiVersion;
         private static ConfigEntry<int> _maintenanceVersion;
+        private static ConfigEntry<int> _audioVersion;
 
         // 语言设置
         public static ConfigEntry<int> DefaultLanguage { get; private set; }
@@ -71,6 +73,16 @@ namespace ChillPatcher
         public static ConfigEntry<float> TagDropdownHeightOffset { get; private set; }
         public static ConfigEntry<int> MaxTagsInTitle { get; private set; }
         public static ConfigEntry<bool> CleanInvalidMusicData { get; private set; }
+
+        // 音频自动静音设置
+        public static ConfigEntry<bool> EnableAutoMuteOnOtherAudio { get; private set; }
+        public static ConfigEntry<float> AutoMuteVolumeLevel { get; private set; }
+        public static ConfigEntry<float> AudioDetectionInterval { get; private set; }
+        public static ConfigEntry<float> AudioResumeFadeInDuration { get; private set; }
+        public static ConfigEntry<float> AudioMuteFadeOutDuration { get; private set; }
+
+        // 系统媒体控制设置
+        public static ConfigEntry<bool> EnableSystemMediaTransport { get; private set; }
         
         // 配置文件引用（用于版本重置）
         private static ConfigFile _configFile;
@@ -305,6 +317,80 @@ namespace ChillPatcher
                 "默认：false"
             );
 
+            // 音频自动静音配置
+            EnableAutoMuteOnOtherAudio = config.Bind(
+                "Audio",
+                "EnableAutoMuteOnOtherAudio",
+                false,
+                "是否启用系统音频检测自动静音功能\n" +
+                "true = 当检测到其他应用播放音频时，自动降低游戏音乐音量\n" +
+                "false = 禁用此功能（默认）\n" +
+                "注意：此功能使用 Windows WASAPI，仅在 Windows 上有效"
+            );
+
+            AutoMuteVolumeLevel = config.Bind(
+                "Audio",
+                "AutoMuteVolumeLevel",
+                0.1f,
+                new ConfigDescription(
+                    "检测到其他音频时的目标音量（0-1）\n" +
+                    "0 = 完全静音\n" +
+                    "0.1 = 降低到10%（默认）\n" +
+                    "1 = 不降低\n" +
+                    "建议：0.05-0.2",
+                    new AcceptableValueRange<float>(0f, 1f)
+                )
+            );
+
+            AudioDetectionInterval = config.Bind(
+                "Audio",
+                "AudioDetectionInterval",
+                1.0f,
+                new ConfigDescription(
+                    "检测其他音频的间隔（秒）\n" +
+                    "默认：1秒\n" +
+                    "较小值：响应更快，CPU占用略高\n" +
+                    "较大值：CPU占用低，响应略慢\n" +
+                    "建议范围：0.5-3秒",
+                    new AcceptableValueRange<float>(0.1f, 10f)
+                )
+            );
+
+            AudioResumeFadeInDuration = config.Bind(
+                "Audio",
+                "AudioResumeFadeInDuration",
+                1.0f,
+                new ConfigDescription(
+                    "恢复音量的淡入时间（秒）\n" +
+                    "当其他音频停止时，游戏音乐会在此时间内逐渐恢复音量\n" +
+                    "默认：1秒",
+                    new AcceptableValueRange<float>(0f, 5f)
+                )
+            );
+
+            AudioMuteFadeOutDuration = config.Bind(
+                "Audio",
+                "AudioMuteFadeOutDuration",
+                0.3f,
+                new ConfigDescription(
+                    "降低音量的淡出时间（秒）\n" +
+                    "当检测到其他音频时，游戏音乐会在此时间内逐渐降低音量\n" +
+                    "默认：0.3秒（快速响应）",
+                    new AcceptableValueRange<float>(0f, 3f)
+                )
+            );
+
+            // 系统媒体控制配置
+            EnableSystemMediaTransport = config.Bind(
+                "Audio",
+                "EnableSystemMediaTransport",
+                false,
+                "是否启用系统媒体控制功能 (SMTC)\n" +
+                "true = 启用，在系统媒体浮窗中显示播放信息，支持媒体键控制\n" +
+                "false = 禁用（默认）\n" +
+                "注意：此功能需要 ChillSmtcBridge.dll，仅在 Windows 10/11 上有效"
+            );
+
             Plugin.Logger.LogInfo("配置文件已加载:");
             Plugin.Logger.LogInfo($"  - 默认语言: {DefaultLanguage.Value}");
             Plugin.Logger.LogInfo($"  - 离线用户ID: {OfflineUserId.Value}");
@@ -323,6 +409,13 @@ namespace ChillPatcher
             Plugin.Logger.LogInfo($"  - 启用缓存: {EnablePlaylistCache.Value}");
             Plugin.Logger.LogInfo($"  - 隐藏空Tag: {HideEmptyTags.Value}");
             Plugin.Logger.LogInfo($"  - Tag下拉框高度: a={TagDropdownHeightMultiplier.Value}, b={TagDropdownHeightOffset.Value}");
+            Plugin.Logger.LogInfo($"  - 自动静音功能: {EnableAutoMuteOnOtherAudio.Value}");
+            if (EnableAutoMuteOnOtherAudio.Value)
+            {
+                Plugin.Logger.LogInfo($"    - 目标音量: {AutoMuteVolumeLevel.Value}");
+                Plugin.Logger.LogInfo($"    - 检测间隔: {AudioDetectionInterval.Value}秒");
+            }
+            Plugin.Logger.LogInfo($"  - 系统媒体控制: {EnableSystemMediaTransport.Value}");
         }
         
         /// <summary>
@@ -345,7 +438,8 @@ namespace ChillPatcher
                 { "Rime", new ConfigDefinition("_Version", "Rime") },
                 { "Playlist", new ConfigDefinition("_Version", "Playlist") },
                 { "UI", new ConfigDefinition("_Version", "UI") },
-                { "Maintenance", new ConfigDefinition("_Version", "Maintenance") }
+                { "Maintenance", new ConfigDefinition("_Version", "Maintenance") },
+                { "Audio", new ConfigDefinition("_Version", "Audio") }
             };
             
             // 记录缺失的版本条目（需要按当前版本是否>1来决定是否重置）
@@ -381,6 +475,7 @@ namespace ChillPatcher
             _playlistVersion = config.Bind("_Version", "Playlist", SectionVersions["Playlist"], "配置分区版本号（请勿手动修改）");
             _uiVersion = config.Bind("_Version", "UI", SectionVersions["UI"], "配置分区版本号（请勿手动修改）");
             _maintenanceVersion = config.Bind("_Version", "Maintenance", SectionVersions["Maintenance"], "配置分区版本号（请勿手动修改）");
+            _audioVersion = config.Bind("_Version", "Audio", SectionVersions["Audio"], "配置分区版本号（请勿手动修改）");
         }
         
         // 记录缺失的版本条目（版本>1需要重置）
@@ -408,6 +503,7 @@ namespace ChillPatcher
             if (_playlistVersion.Value < SectionVersions["Playlist"] && !sectionsToReset.Contains("Playlist")) sectionsToReset.Add("Playlist");
             if (_uiVersion.Value < SectionVersions["UI"] && !sectionsToReset.Contains("UI")) sectionsToReset.Add("UI");
             if (_maintenanceVersion.Value < SectionVersions["Maintenance"] && !sectionsToReset.Contains("Maintenance")) sectionsToReset.Add("Maintenance");
+            if (_audioVersion.Value < SectionVersions["Audio"] && !sectionsToReset.Contains("Audio")) sectionsToReset.Add("Audio");
             
             if (sectionsToReset.Count > 0)
             {

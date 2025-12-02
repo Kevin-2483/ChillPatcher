@@ -42,6 +42,7 @@
     <PackageReference Include="TagLibSharp" Version="2.3.0" />
     <PackageReference Include="System.Data.SQLite.Core" Version="1.0.118" />
     <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.*" PrivateAssets="all" />
+    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -193,6 +194,14 @@
     <Copy SourceFiles="@(SQLiteFiles)" DestinationFolder="$(PluginDir)" Condition="Exists('$(OutputPath)System.Data.SQLite.dll')" />
     <Copy SourceFiles="@(SQLiteNativeX64)" DestinationFiles="$(NativePluginDir)x64\SQLite.Interop.dll" Condition="Exists('$(OutputPath)x64\SQLite.Interop.dll')" />
     <!-- <Copy SourceFiles="@(SQLiteNativeX86)" DestinationFiles="$(NativePluginDir)x86\SQLite.Interop.dll" Condition="Exists('$(OutputPath)x86\SQLite.Interop.dll')" />     -->
+    
+    <!-- Copy NAudio.Wasapi DLLs (用于系统音频监控) -->
+    <ItemGroup>
+      <NAudioFiles Include="$(OutputPath)NAudio.Core.dll" />
+      <NAudioFiles Include="$(OutputPath)NAudio.Wasapi.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(NAudioFiles)" DestinationFolder="$(PluginDir)" Condition="Exists('$(OutputPath)NAudio.Wasapi.dll')" />
+    
     <!-- Copy rime.dll -->
     <Copy SourceFiles="$(RimeDllPath)" DestinationFolder="$(PluginDir)" Condition="Exists('$(RimeDllPath)')" />
     
@@ -249,6 +258,13 @@
     
     <Copy SourceFiles="@(FlacDecoderX64)" DestinationFolder="$(NativePluginDir)x64" Condition="Exists('$(ProjectDir)bin\native\x64\ChillFlacDecoder.dll')" />
     <!-- <Copy SourceFiles="@(FlacDecoderX86)" DestinationFolder="$(NativePluginDir)x86" Condition="Exists('$(ProjectDir)bin\native\x86\ChillFlacDecoder.dll')" /> -->
+    
+    <!-- Copy Native SMTC Bridge DLL -->
+    <ItemGroup>
+      <SmtcBridgeX64 Include="$(ProjectDir)bin\native\x64\ChillSmtcBridge.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SmtcBridgeX64)" DestinationFolder="$(NativePluginDir)x64" Condition="Exists('$(ProjectDir)bin\native\x64\ChillSmtcBridge.dll')" />
+    
     <ItemGroup>
        <VCRuntimeFiles Include="$(ProjectDir)lib\*.dll" /> 
     </ItemGroup>
@@ -259,9 +275,11 @@
     <Message Text="Copied OpenCC data to: $(OpenCCDir)" Importance="high" />
     <Message Text="Copied Native FLAC decoder (x64)" Importance="high" Condition="Exists('$(ProjectDir)bin\native\x64\ChillFlacDecoder.dll')" />
     <!-- <Message Text="Copied Native FLAC decoder (x86)" Importance="high" Condition="Exists('$(ProjectDir)bin\native\x86\ChillFlacDecoder.dll')" /> -->
+    <Message Text="Copied Native SMTC bridge (x64)" Importance="high" Condition="Exists('$(ProjectDir)bin\native\x64\ChillSmtcBridge.dll')" />
     <Message Text="User data directory: $(RimeUserDir)" Importance="high" />
     <Warning Text="rime.dll not found at $(RimeDllPath)" Condition="!Exists('$(RimeDllPath)')" />
     <Warning Text="Native FLAC decoder (x64) not found - FLAC decoding will fall back to Unity" Condition="!Exists('$(ProjectDir)bin\native\x64\ChillFlacDecoder.dll')" />
+    <Warning Text="Native SMTC bridge (x64) not found - System media transport controls will be disabled" Condition="!Exists('$(ProjectDir)bin\native\x64\ChillSmtcBridge.dll')" />
     <!-- <Warning Text="Native FLAC decoder (x86) not found - FLAC decoding will fall back to Unity" Condition="!Exists('$(ProjectDir)bin\native\x86\ChillFlacDecoder.dll')" /> -->
   </Target>
 
