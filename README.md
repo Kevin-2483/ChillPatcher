@@ -6,7 +6,9 @@
 - 使《Chill With You》游戏正确在 Wallpaper Engine 环境下运行.
 - 添加了游戏内输入法.
 
-![截屏展示](<img/Screenshot 2025-12-01 151422.png>)
+![截屏展示](<img/Screenshot 2025-12-02 235846.png>)
+
+![队列展示](<img/Screenshot 2025-12-02 235858.png>)
 
 ## 🐛 遇到问题？
 
