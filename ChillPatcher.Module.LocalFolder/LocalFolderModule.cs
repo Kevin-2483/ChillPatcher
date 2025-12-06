@@ -138,15 +138,15 @@ namespace ChillPatcher.Module.LocalFolder
         {
             var config = _context.ConfigManager;
 
-            _rootFolder = config.Bind(
-                "LocalFolder",
+            // 使用 BindDefault 绑定到模块默认 section: [Module:com.chillpatcher.localfolder]
+            // 或使用 Bind(null, key, ...) 也可以
+            _rootFolder = config.BindDefault(
                 "RootFolder",
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyMusic), "ChillWithYou"),
                 "本地音乐根目录。\n子目录将作为歌单，歌单下的子目录将作为专辑。"
             );
 
-            _forceRescan = config.Bind(
-                "LocalFolder",
+            _forceRescan = config.BindDefault(
                 "ForceRescan",
                 false,
                 "是否每次启动都强制重新扫描（忽略重扫描标记和数据库缓存）。"
@@ -328,12 +328,19 @@ namespace ChillPatcher.Module.LocalFolder
 
         #region IMusicSourceProvider
 
+        public MusicSourceType SourceType => MusicSourceType.File;
+
         public async Task<List<MusicInfo>> GetMusicListAsync()
         {
             return new List<MusicInfo>(_context.MusicRegistry.GetMusicByModule(ModuleId));
         }
 
         public async Task<UnityEngine.AudioClip> LoadAudioAsync(string uuid)
+        {
+            return await LoadAudioAsync(uuid, System.Threading.CancellationToken.None);
+        }
+
+        public async Task<UnityEngine.AudioClip> LoadAudioAsync(string uuid, System.Threading.CancellationToken cancellationToken)
         {
             var music = _context.MusicRegistry.GetMusic(uuid);
             if (music == null || music.ModuleId != ModuleId)

@@ -54,6 +54,7 @@ namespace ChillPatcher
         public static ConfigEntry<bool> EnableAchievementCache { get; private set; }
 
         // 键盘钩子设置
+        public static ConfigEntry<bool> EnableKeyboardHook { get; private set; }
         public static ConfigEntry<int> KeyboardHookInterval { get; private set; }
 
         // Rime输入法设置
@@ -166,6 +167,21 @@ namespace ChillPatcher
                 "注意：缓存永久保留，每次启动会自动同步到Steam"
             );
 
+            // 键盘钩子开关
+            EnableKeyboardHook = config.Bind(
+                "KeyboardHook",
+                "EnableKeyboardHook",
+                true,
+                new ConfigDescription(
+                    "是否启用键盘钩子功能\n" +
+                    "true = 启用键盘钩子（默认，支持中文输入和快捷键）\n" +
+                    "false = 完全禁用键盘钩子和Rime输入法\n" +
+                    "  - 禁用后无法使用中文搜索和自定义输入法\n" +
+                    "  - 可减少后台线程和CPU占用\n" +
+                    "  - 如果遇到键盘输入冲突问题，可尝试禁用"
+                )
+            );
+
             // 键盘钩子消息循环间隔
             KeyboardHookInterval = config.Bind(
                 "KeyboardHook",
@@ -176,7 +192,8 @@ namespace ChillPatcher
                     "默认值：10ms（推荐）\n" +
                     "较小值：响应更快，CPU占用略高\n" +
                     "较大值：CPU占用低，响应略慢\n" +
-                    "建议范围：1-10ms",
+                    "建议范围：1-10ms\n" +
+                    "注意：仅在启用键盘钩子时有效",
                     new AcceptableValueRange<int>(1, 100)
                 )
             );

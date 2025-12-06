@@ -121,6 +121,14 @@ namespace ChillPatcher.Patches
         /// </summary>
         public static void Initialize()
         {
+            // 检查是否启用键盘钩子
+            if (!PluginConfig.EnableKeyboardHook.Value)
+            {
+                Plugin.Logger.LogInfo("[KeyboardHook] 键盘钩子已禁用（配置: EnableKeyboardHook = false）");
+                Plugin.Logger.LogInfo("[KeyboardHook] Rime输入法也不会启动");
+                return;
+            }
+
             if (hookThread != null && hookThread.IsAlive)
             {
                 Plugin.Logger.LogWarning("[KeyboardHook] 钩子线程已经在运行");
@@ -785,6 +793,12 @@ namespace ChillPatcher.Patches
         /// </summary>
         public static void HealthCheck()
         {
+            // 如果键盘钩子被禁用，跳过健康检查
+            if (!PluginConfig.EnableKeyboardHook.Value)
+            {
+                return;
+            }
+
             try
             {
                 // 检查钩子线程是否存活

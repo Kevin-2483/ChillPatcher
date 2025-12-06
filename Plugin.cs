@@ -136,8 +136,8 @@ namespace ChillPatcher
                 var configFile = pluginInstance?.Config ?? new BepInEx.Configuration.ConfigFile(
                     System.IO.Path.Combine(BepInEx.Paths.ConfigPath, $"{MyPluginInfo.PLUGIN_GUID}.cfg"), true);
 
-                // 创建模块上下文
-                var context = new ModuleContext(
+                // 创建模块上下文工厂（每个模块会获得独立的上下文和配置管理器）
+                var contextFactory = new ModuleContextFactory(
                     PluginPath,
                     configFile,
                     Logger,
@@ -151,7 +151,7 @@ namespace ChillPatcher
                 );
 
                 // 初始化模块加载器
-                ModuleLoader.Initialize(ModulesPath, context, Logger);
+                ModuleLoader.Initialize(ModulesPath, contextFactory, Logger);
 
                 // 加载所有模块
                 await ModuleLoader.Instance.LoadAllModulesAsync();

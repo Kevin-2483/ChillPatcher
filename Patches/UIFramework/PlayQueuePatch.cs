@@ -362,36 +362,31 @@ namespace ChillPatcher.Patches.UIFramework
             
             Plugin.Log.LogInfo($"[PlayQueuePatch] Got audio: {audio.Title}, AudioClip={(audio.AudioClip != null ? "exists" : "null")}");
             
-            // 获取或异步加载 AudioClip
+            // 使用智能加载 - 自动判断音源类型
             AudioClip audioClip = audio.AudioClip;
             if (audioClip == null)
             {
-                // 模块提供的音频可能需要异步加载
-                if (audio.PathType == AudioMode.LocalPc && !string.IsNullOrEmpty(audio.LocalPath))
+                Plugin.Log.LogInfo($"[PlayQueuePatch] Smart loading audio: {audio.Title}");
+                try
                 {
-                    Plugin.Log.LogInfo($"[PlayQueuePatch] Async loading audio: {audio.Title}");
-                    try
+                    using (var cts = new CancellationTokenSource())
                     {
-                        using (var cts = new CancellationTokenSource())
-                        {
-                            cts.CancelAfter(TimeSpan.FromSeconds(10));  // 10秒超时
-                            Plugin.Log.LogInfo($"[PlayQueuePatch] Calling GetAudioClip...");
-                            audioClip = await audio.GetAudioClip(cts.Token);
-                            Plugin.Log.LogInfo($"[PlayQueuePatch] GetAudioClip returned: {(audioClip != null ? audioClip.name : "null")}");
-                        }
+                        cts.CancelAfter(TimeSpan.FromSeconds(30));  // 30秒超时（流媒体可能需要更长时间）
+                        audioClip = await StreamingAudioLoader.SmartLoadAsync(audio, cts.Token);
+                        Plugin.Log.LogInfo($"[PlayQueuePatch] SmartLoad returned: {(audioClip != null ? audioClip.name : "null")}");
                     }
-                    catch (OperationCanceledException)
-                    {
-                        Plugin.Log.LogWarning($"[PlayQueuePatch] Audio load timeout: {audio.Title}");
-                        await musicService.PlayNextMusic(1, MusicChangeKind.Auto);
-                        return;
-                    }
-                    catch (Exception ex)
-                    {
-                        Plugin.Log.LogError($"[PlayQueuePatch] Audio load failed: {ex.Message}");
-                        await musicService.PlayNextMusic(1, MusicChangeKind.Auto);
-                        return;
-                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    Plugin.Log.LogWarning($"[PlayQueuePatch] Audio load timeout: {audio.Title}");
+                    await musicService.PlayNextMusic(1, MusicChangeKind.Auto);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.LogError($"[PlayQueuePatch] Audio load failed: {ex.Message}");
+                    await musicService.PlayNextMusic(1, MusicChangeKind.Auto);
+                    return;
                 }
             }
             
@@ -509,7 +504,14 @@ namespace ChillPatcher.Patches.UIFramework
             
             // 检查是否需要异步加载
             var audioClip = audioInfo.AudioClip;
-            if (audioClip == null && audioInfo.PathType == AudioMode.LocalPc && !string.IsNullOrEmpty(audioInfo.LocalPath))
+            bool needsAsyncLoad = audioClip == null && (
+                // 本地文件
+                (audioInfo.PathType == AudioMode.LocalPc && !string.IsNullOrEmpty(audioInfo.LocalPath)) ||
+                // 流媒体源
+                StreamingAudioLoader.IsStreamingSource(audioInfo)
+            );
+            
+            if (needsAsyncLoad)
             {
                 // 需要异步加载，启动异步播放
                 PlayArugumentMusicAsync(__instance, audioInfo, changeKind).Forget();
@@ -527,11 +529,11 @@ namespace ChillPatcher.Patches.UIFramework
             AudioClip audioClip;
             try
             {
-                Plugin.Log.LogInfo($"[PlayQueuePatch] Async loading: {audioInfo.Title}");
+                Plugin.Log.LogInfo($"[PlayQueuePatch] Smart async loading: {audioInfo.Title}");
                 using (var cts = new CancellationTokenSource())
                 {
-                    cts.CancelAfter(TimeSpan.FromSeconds(10));
-                    audioClip = await audioInfo.GetAudioClip(cts.Token);
+                    cts.CancelAfter(TimeSpan.FromSeconds(30));  // 30秒超时（流媒体可能需要更长时间）
+                    audioClip = await StreamingAudioLoader.SmartLoadAsync(audioInfo, cts.Token);
                 }
             }
             catch (OperationCanceledException)
@@ -601,13 +603,17 @@ namespace ChillPatcher.Patches.UIFramework
                 return false;
             }
             
-            // 获取 AudioClip（可能需要异步加载）
+            // 使用智能加载获取 AudioClip
             AudioClip audioClip;
             try
             {
-                Plugin.Log.LogInfo($"[PlayQueuePatch] Calling GetAudioClip for: {audio.Title}");
-                audioClip = await audio.GetAudioClip(CancellationToken.None);
-                Plugin.Log.LogInfo($"[PlayQueuePatch] GetAudioClip returned: {(audioClip != null ? audioClip.name : "null")}");
+                Plugin.Log.LogInfo($"[PlayQueuePatch] Smart loading for: {audio.Title}");
+                using (var cts = new CancellationTokenSource())
+                {
+                    cts.CancelAfter(TimeSpan.FromSeconds(30));
+                    audioClip = await StreamingAudioLoader.SmartLoadAsync(audio, cts.Token);
+                }
+                Plugin.Log.LogInfo($"[PlayQueuePatch] SmartLoad returned: {(audioClip != null ? audioClip.name : "null")}");
             }
             catch (Exception ex)
             {

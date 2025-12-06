@@ -19,6 +19,7 @@ namespace ChillPatcher.ModuleSystem
         private readonly string _pluginPath;
         private readonly ConfigFile _config;
         private readonly ManualLogSource _logger;
+        private readonly string _moduleId;
 
         public ITagRegistry TagRegistry { get; }
         public IAlbumRegistry AlbumRegistry { get; }
@@ -34,6 +35,7 @@ namespace ChillPatcher.ModuleSystem
             string pluginPath,
             ConfigFile config,
             ManualLogSource logger,
+            string moduleId,
             ITagRegistry tagRegistry,
             IAlbumRegistry albumRegistry,
             IMusicRegistry musicRegistry,
@@ -45,6 +47,7 @@ namespace ChillPatcher.ModuleSystem
             _pluginPath = pluginPath;
             _config = config;
             _logger = logger;
+            _moduleId = moduleId;
 
             TagRegistry = tagRegistry;
             AlbumRegistry = albumRegistry;
@@ -54,7 +57,7 @@ namespace ChillPatcher.ModuleSystem
             AudioLoader = audioLoader;
             DependencyLoader = dependencyLoader;
 
-            ConfigManager = new ModuleConfigManager(config);
+            ConfigManager = new ModuleConfigManager(config, moduleId);
         }
 
         public string GetModuleDataPath(string moduleId)
@@ -77,31 +80,70 @@ namespace ChillPatcher.ModuleSystem
 
     /// <summary>
     /// 模块配置管理器实现
+    /// 自动为模块配置添加 ID 前缀，实现配置隔离
+    /// 
+    /// 配置格式：
+    /// - 默认 section: [Module:com.example.mymodule]
+    /// - 自定义 section: [Module:com.example.mymodule:CustomSection]
     /// </summary>
     public class ModuleConfigManager : IModuleConfigManager
     {
+        private const string MODULE_SECTION_PREFIX = "Module";
+        
         private readonly ConfigFile _config;
+        private readonly string _moduleId;
+        private readonly string _defaultSection;
         private readonly Dictionary<string, object> _overrides = new Dictionary<string, object>();
 
         public ConfigFile Config => _config;
+        public string ModuleId => _moduleId;
 
-        public ModuleConfigManager(ConfigFile config)
+        public ModuleConfigManager(ConfigFile config, string moduleId)
         {
             _config = config;
+            _moduleId = moduleId ?? throw new ArgumentNullException(nameof(moduleId));
+            _defaultSection = GetFullSectionName(null);
+        }
+
+        /// <summary>
+        /// 获取完整的 section 名称
+        /// </summary>
+        /// <param name="section">相对 section 名称（null 或空表示使用默认 section）</param>
+        /// <returns>完整的 section 名称，格式：Module:moduleId 或 Module:moduleId:section</returns>
+        public string GetFullSectionName(string section)
+        {
+            if (string.IsNullOrEmpty(section))
+            {
+                // 默认 section：使用模块 ID
+                return $"{MODULE_SECTION_PREFIX}:{_moduleId}";
+            }
+            else
+            {
+                // 自定义 section：添加模块 ID 前缀
+                return $"{MODULE_SECTION_PREFIX}:{_moduleId}:{section}";
+            }
         }
 
         public ConfigEntry<T> Bind<T>(string section, string key, T defaultValue, string description)
         {
-            return _config.Bind(section, key, defaultValue, description);
+            var fullSection = GetFullSectionName(section);
+            return _config.Bind(fullSection, key, defaultValue, description);
         }
 
         public ConfigEntry<T> Bind<T>(string section, string key, T defaultValue, ConfigDescription description)
         {
-            return _config.Bind(section, key, defaultValue, description);
+            var fullSection = GetFullSectionName(section);
+            return _config.Bind(fullSection, key, defaultValue, description);
+        }
+
+        public ConfigEntry<T> BindDefault<T>(string key, T defaultValue, string description)
+        {
+            return _config.Bind(_defaultSection, key, defaultValue, description);
         }
 
         public bool Override<T>(string section, string key, T value)
         {
+            // Override 不添加模块前缀，用于覆盖主程序配置
             var configKey = $"{section}.{key}";
             _overrides[configKey] = value;
 
@@ -117,7 +159,8 @@ namespace ChillPatcher.ModuleSystem
 
         public T GetValue<T>(string section, string key, T defaultValue = default)
         {
-            var configKey = $"{section}.{key}";
+            var fullSection = GetFullSectionName(section);
+            var configKey = $"{fullSection}.{key}";
             
             // 先检查覆盖值
             if (_overrides.TryGetValue(configKey, out var overrideValue))
@@ -126,7 +169,7 @@ namespace ChillPatcher.ModuleSystem
             }
 
             // 从配置文件获取
-            if (_config.TryGetEntry<T>(section, key, out var entry))
+            if (_config.TryGetEntry<T>(fullSection, key, out var entry))
             {
                 return entry.Value;
             }
@@ -134,9 +177,15 @@ namespace ChillPatcher.ModuleSystem
             return defaultValue;
         }
 
+        public T GetDefaultValue<T>(string key, T defaultValue = default)
+        {
+            return GetValue<T>(null, key, defaultValue);
+        }
+
         public void SetValue<T>(string section, string key, T value)
         {
-            if (_config.TryGetEntry<T>(section, key, out var entry))
+            var fullSection = GetFullSectionName(section);
+            if (_config.TryGetEntry<T>(fullSection, key, out var entry))
             {
                 entry.Value = value;
             }
@@ -144,7 +193,8 @@ namespace ChillPatcher.ModuleSystem
 
         public bool HasKey(string section, string key)
         {
-            return _config.TryGetEntry<object>(section, key, out _);
+            var fullSection = GetFullSectionName(section);
+            return _config.TryGetEntry<object>(fullSection, key, out _);
         }
 
         public void Save()

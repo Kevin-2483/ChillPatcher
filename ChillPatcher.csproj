@@ -121,6 +121,18 @@
       <HintPath>F:\SteamLibrary\steamapps\common\wallpaper_engine\projects\myprojects\chill_with_you\Chill With You_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="UnityEngine.AssetBundleModule">
+      <HintPath>F:\SteamLibrary\steamapps\common\wallpaper_engine\projects\myprojects\chill_with_you\Chill With You_Data\Managed\UnityEngine.AssetBundleModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UnityWebRequestModule">
+      <HintPath>F:\SteamLibrary\steamapps\common\wallpaper_engine\projects\myprojects\chill_with_you\Chill With You_Data\Managed\UnityEngine.UnityWebRequestModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UnityWebRequestAudioModule">
+      <HintPath>F:\SteamLibrary\steamapps\common\wallpaper_engine\projects\myprojects\chill_with_you\Chill With You_Data\Managed\UnityEngine.UnityWebRequestAudioModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

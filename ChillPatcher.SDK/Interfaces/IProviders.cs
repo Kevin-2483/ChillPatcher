@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using ChillPatcher.SDK.Models;
 using UnityEngine;
@@ -8,6 +9,8 @@ namespace ChillPatcher.SDK.Interfaces
     /// <summary>
     /// 音乐源提供器接口
     /// 模块实现此接口提供音乐列表和加载功能
+    /// 
+    /// 对于流媒体模块，应该实现 IStreamingMusicSourceProvider 接口
     /// </summary>
     public interface IMusicSourceProvider
     {
@@ -24,6 +27,14 @@ namespace ChillPatcher.SDK.Interfaces
         Task<AudioClip> LoadAudioAsync(string uuid);
 
         /// <summary>
+        /// 加载指定音乐的 AudioClip（支持取消）
+        /// </summary>
+        /// <param name="uuid">音乐 UUID</param>
+        /// <param name="cancellationToken">取消令牌</param>
+        /// <returns>加载的 AudioClip</returns>
+        Task<AudioClip> LoadAudioAsync(string uuid, CancellationToken cancellationToken);
+
+        /// <summary>
         /// 卸载指定音乐的 AudioClip
         /// </summary>
         /// <param name="uuid">音乐 UUID</param>
@@ -33,6 +44,11 @@ namespace ChillPatcher.SDK.Interfaces
         /// 刷新音乐列表
         /// </summary>
         Task RefreshAsync();
+
+        /// <summary>
+        /// 获取音乐源类型
+        /// </summary>
+        MusicSourceType SourceType { get; }
     }
 
     /// <summary>

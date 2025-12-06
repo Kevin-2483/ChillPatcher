@@ -4,11 +4,75 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
+using BepInEx.Configuration;
 using BepInEx.Logging;
 using ChillPatcher.SDK.Interfaces;
 
 namespace ChillPatcher.ModuleSystem
 {
+    /// <summary>
+    /// 模块上下文工厂
+    /// 用于为每个模块创建独立的上下文（包含独立的配置管理器）
+    /// </summary>
+    public class ModuleContextFactory
+    {
+        private readonly string _pluginPath;
+        private readonly ConfigFile _config;
+        private readonly ManualLogSource _logger;
+        private readonly ITagRegistry _tagRegistry;
+        private readonly IAlbumRegistry _albumRegistry;
+        private readonly IMusicRegistry _musicRegistry;
+        private readonly IEventBus _eventBus;
+        private readonly IDefaultCoverProvider _defaultCover;
+        private readonly IAudioLoader _audioLoader;
+        private readonly IDependencyLoader _dependencyLoader;
+
+        public ModuleContextFactory(
+            string pluginPath,
+            ConfigFile config,
+            ManualLogSource logger,
+            ITagRegistry tagRegistry,
+            IAlbumRegistry albumRegistry,
+            IMusicRegistry musicRegistry,
+            IEventBus eventBus,
+            IDefaultCoverProvider defaultCover,
+            IAudioLoader audioLoader,
+            IDependencyLoader dependencyLoader)
+        {
+            _pluginPath = pluginPath;
+            _config = config;
+            _logger = logger;
+            _tagRegistry = tagRegistry;
+            _albumRegistry = albumRegistry;
+            _musicRegistry = musicRegistry;
+            _eventBus = eventBus;
+            _defaultCover = defaultCover;
+            _audioLoader = audioLoader;
+            _dependencyLoader = dependencyLoader;
+        }
+
+        /// <summary>
+        /// 为指定模块创建上下文
+        /// </summary>
+        /// <param name="moduleId">模块 ID</param>
+        /// <returns>模块上下文</returns>
+        public IModuleContext CreateContext(string moduleId)
+        {
+            return new ModuleContext(
+                _pluginPath,
+                _config,
+                _logger,
+                moduleId,
+                _tagRegistry,
+                _albumRegistry,
+                _musicRegistry,
+                _eventBus,
+                _defaultCover,
+                _audioLoader,
+                _dependencyLoader);
+        }
+    }
+
     /// <summary>
     /// 模块加载器
     /// 负责扫描、加载和管理音乐模块
@@ -21,7 +85,7 @@ namespace ChillPatcher.ModuleSystem
         private readonly string _modulesPath;
         private readonly ManualLogSource _logger;
         private readonly List<LoadedModule> _loadedModules = new List<LoadedModule>();
-        private readonly IModuleContext _context;
+        private readonly ModuleContextFactory _contextFactory;
 
         /// <summary>
         /// 已加载的模块列表
@@ -41,7 +105,7 @@ namespace ChillPatcher.ModuleSystem
         /// <summary>
         /// 初始化模块加载器
         /// </summary>
-        public static void Initialize(string modulesPath, IModuleContext context, ManualLogSource logger)
+        public static void Initialize(string modulesPath, ModuleContextFactory contextFactory, ManualLogSource logger)
         {
             if (_instance != null)
             {
@@ -49,13 +113,13 @@ namespace ChillPatcher.ModuleSystem
                 return;
             }
 
-            _instance = new ModuleLoader(modulesPath, context, logger);
+            _instance = new ModuleLoader(modulesPath, contextFactory, logger);
         }
 
-        private ModuleLoader(string modulesPath, IModuleContext context, ManualLogSource logger)
+        private ModuleLoader(string modulesPath, ModuleContextFactory contextFactory, ManualLogSource logger)
         {
             _modulesPath = modulesPath;
-            _context = context;
+            _contextFactory = contextFactory;
             _logger = logger;
 
             // 确保模块目录存在
@@ -171,8 +235,11 @@ namespace ChillPatcher.ModuleSystem
         {
             _logger.LogInfo($"初始化模块: {module.DisplayName} ({module.ModuleId})");
 
+            // 为此模块创建独立的上下文（包含独立的配置管理器）
+            var moduleContext = _contextFactory.CreateContext(module.ModuleId);
+
             // 调用模块初始化
-            await module.InitializeAsync(_context);
+            await module.InitializeAsync(moduleContext);
 
             // 启用模块
             module.OnEnable();
@@ -183,7 +250,8 @@ namespace ChillPatcher.ModuleSystem
                 Module = module,
                 Assembly = assembly,
                 ModuleDirectory = Path.GetDirectoryName(assembly.Location),
-                LoadedAt = DateTime.Now
+                LoadedAt = DateTime.Now,
+                Context = moduleContext
             };
 
             _loadedModules.Add(loadedModule);
@@ -259,5 +327,10 @@ namespace ChillPatcher.ModuleSystem
         public Assembly Assembly { get; set; }
         public string ModuleDirectory { get; set; }
         public DateTime LoadedAt { get; set; }
+        
+        /// <summary>
+        /// 模块的独立上下文（包含独立的配置管理器）
+        /// </summary>
+        public IModuleContext Context { get; set; }
     }
 }
