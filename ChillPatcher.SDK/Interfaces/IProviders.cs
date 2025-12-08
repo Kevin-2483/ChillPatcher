@@ -149,12 +149,5 @@ namespace ChillPatcher.SDK.Interfaces
         /// <param name="uuid">歌曲 UUID</param>
         /// <returns>是否删除成功</returns>
         bool Delete(string uuid);
-
-        /// <summary>
-        /// 获取删除确认消息
-        /// </summary>
-        /// <param name="uuid">歌曲 UUID</param>
-        /// <returns>确认消息文本</returns>
-        string GetDeleteConfirmMessage(string uuid);
     }
 }

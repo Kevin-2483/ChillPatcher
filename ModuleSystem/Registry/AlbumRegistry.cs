@@ -58,14 +58,28 @@ namespace ChillPatcher.ModuleSystem.Registry
                 album.ModuleId = moduleId;
                 _albums[album.AlbumId] = album;
 
-                // 按 Tag 索引
-                if (!string.IsNullOrEmpty(album.TagId))
+                // 按 Tag 索引（支持多 Tag）
+                if (album.TagIds != null && album.TagIds.Count > 0)
                 {
-                    if (!_albumsByTag.ContainsKey(album.TagId))
+                    foreach (var tagId in album.TagIds)
                     {
-                        _albumsByTag[album.TagId] = new List<string>();
+                        if (string.IsNullOrEmpty(tagId)) continue;
+                        
+                        if (!_albumsByTag.ContainsKey(tagId))
+                        {
+                            _albumsByTag[tagId] = new List<string>();
+                        }
+                        if (!_albumsByTag[tagId].Contains(album.AlbumId))
+                        {
+                            _albumsByTag[tagId].Add(album.AlbumId);
+                        }
+
+                        // 如果是增长专辑，自动标记 Tag 为增长 Tag
+                        if (album.IsGrowableAlbum)
+                        {
+                            TagRegistry.Instance?.MarkAsGrowableTag(tagId, album.AlbumId);
+                        }
                     }
-                    _albumsByTag[album.TagId].Add(album.AlbumId);
                 }
 
                 // 按模块索引
@@ -75,7 +89,11 @@ namespace ChillPatcher.ModuleSystem.Registry
                 }
                 _albumsByModule[moduleId].Add(album.AlbumId);
 
-                _logger.LogInfo($"注册专辑: {album.DisplayName} (ID: {album.AlbumId}, Tag: {album.TagId}, Module: {moduleId})");
+                var growableInfo = album.IsGrowableAlbum ? " [增长专辑]" : "";
+                var tagsInfo = album.TagIds != null && album.TagIds.Count > 0 
+                    ? string.Join(", ", album.TagIds) 
+                    : "无";
+                _logger.LogInfo($"注册专辑: {album.DisplayName} (ID: {album.AlbumId}, Tags: [{tagsInfo}], Module: {moduleId}){growableInfo}");
 
                 OnAlbumRegistered?.Invoke(album);
             }
@@ -88,10 +106,16 @@ namespace ChillPatcher.ModuleSystem.Registry
                 if (!_albums.TryGetValue(albumId, out var album))
                     return;
 
-                // 从 Tag 索引中移除
-                if (!string.IsNullOrEmpty(album.TagId) && _albumsByTag.TryGetValue(album.TagId, out var tagAlbums))
+                // 从所有 Tag 索引中移除
+                if (album.TagIds != null)
                 {
-                    tagAlbums.Remove(albumId);
+                    foreach (var tagId in album.TagIds)
+                    {
+                        if (!string.IsNullOrEmpty(tagId) && _albumsByTag.TryGetValue(tagId, out var tagAlbums))
+                        {
+                            tagAlbums.Remove(albumId);
+                        }
+                    }
                 }
 
                 // 从模块索引中移除

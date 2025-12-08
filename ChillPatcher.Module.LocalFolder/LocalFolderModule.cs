@@ -164,41 +164,26 @@ namespace ChillPatcher.Module.LocalFolder
         {
             try
             {
-                // 使用模块程序集位置确定原生库路径
-                var assemblyLocation = System.Reflection.Assembly.GetExecutingAssembly().Location;
-                var moduleDir = Path.GetDirectoryName(assemblyLocation);
-                var arch = IntPtr.Size == 8 ? "x64" : "x86";
-                var sqlitePath = Path.Combine(moduleDir, "native", arch, "SQLite.Interop.dll");
+                // 使用 DependencyLoader 加载原生 DLL
+                // DLL 应放在模块目录的 native/x64/ 子目录中
+                var loaded = _context.DependencyLoader.LoadNativeLibraryFromModulePath(
+                    "SQLite.Interop.dll",
+                    ModuleId);
                 
-                if (File.Exists(sqlitePath))
+                if (loaded)
                 {
-                    // 直接使用 kernel32 LoadLibrary
-                    var handle = NativeMethods.LoadLibrary(sqlitePath);
-                    if (handle != IntPtr.Zero)
-                    {
-                        _context.Logger.LogInfo($"[{DisplayName}] 已加载原生依赖: SQLite.Interop.dll");
-                    }
-                    else
-                    {
-                        _context.Logger.LogWarning($"[{DisplayName}] 无法加载 SQLite.Interop.dll (LoadLibrary 失败)");
-                    }
+                    _context.Logger.LogInfo($"[{DisplayName}] 已加载原生依赖: SQLite.Interop.dll");
                 }
                 else
                 {
-                    _context.Logger.LogWarning($"[{DisplayName}] 未找到 SQLite.Interop.dll: {sqlitePath}");
+                    _context.Logger.LogWarning($"[{DisplayName}] 无法加载 SQLite.Interop.dll");
+                    _context.Logger.LogInfo($"[{DisplayName}] 请确保 DLL 位于模块的 native/x64/ 目录中");
                 }
             }
             catch (Exception ex)
             {
                 _context.Logger.LogError($"[{DisplayName}] 加载原生依赖失败: {ex.Message}");
             }
-        }
-
-        // P/Invoke for LoadLibrary
-        private static class NativeMethods
-        {
-            [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
-            public static extern IntPtr LoadLibrary(string libFilename);
         }
 
         #endregion

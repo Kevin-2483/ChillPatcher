@@ -1,20 +1,20 @@
 [submodule "librime"]
-	path = librime
+	path = rime/librime
 	url = https://github.com/rime/librime.git
 [submodule "rime-schemas/luna-pinyin"]
-	path = rime-schemas/luna-pinyin
+	path = rime/rime-schemas/luna-pinyin
 	url = https://github.com/rime/rime-luna-pinyin.git
 [submodule "rime-schemas/double-pinyin"]
-	path = rime-schemas/double-pinyin
+	path = rime/rime-schemas/double-pinyin
 	url = https://github.com/rime/rime-double-pinyin.git
 [submodule "rime-schemas/stroke"]
-	path = rime-schemas/stroke
+	path = rime/rime-schemas/stroke
 	url = https://github.com/rime/rime-stroke.git
 [submodule "rime-schemas/essay"]
-	path = rime-schemas/essay
+	path = rime/rime-schemas/essay
 	url = https://github.com/rime/rime-essay.git
 [submodule "rime-schemas/prelude"]
-	path = rime-schemas/prelude
+	path = rime/rime-schemas/prelude
 	url = https://github.com/rime/rime-prelude.git
 [submodule "NativePlugins/dr_libs"]
 	path = NativePlugins/dr_libs

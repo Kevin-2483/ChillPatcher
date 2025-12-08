@@ -112,11 +112,14 @@ namespace ChillPatcher.UIFramework.Music
             AlbumRegistry albumRegistry,
             bool loadCovers)
         {
-            // 按专辑排序
+            // 按专辑排序，增长专辑排在最后
             var orderedAlbums = songsByAlbum.Keys
-                .Select(albumId => new { AlbumId = albumId, AlbumInfo = albumRegistry.GetAlbum(albumId) })
+                .Select(albumId => new { 
+                    AlbumId = albumId, 
+                    AlbumInfo = albumRegistry.GetAlbum(albumId)
+                })
                 .Where(x => x.AlbumInfo != null)
-                .OrderBy(x => x.AlbumInfo.TagId)
+                .OrderBy(x => x.AlbumInfo.IsGrowableAlbum ? 1 : 0)  // 增长专辑排最后
                 .ThenBy(x => x.AlbumInfo.SortOrder)
                 .ThenBy(x => x.AlbumInfo.DisplayName)
                 .ToList();
@@ -168,15 +171,21 @@ namespace ChillPatcher.UIFramework.Music
             TagRegistry tagRegistry,
             bool loadCovers)
         {
-            foreach (var kvp in unknownSongsByTag.OrderBy(x => x.Key))
+            // 按 Tag 排序，增长列表排在最后
+            var orderedTags = unknownSongsByTag
+                .Select(kvp => new { TagId = kvp.Key, Songs = kvp.Value, TagInfo = tagRegistry?.GetTag(kvp.Key) })
+                .OrderBy(x => x.TagInfo?.IsGrowableList == true ? 1 : 0)  // 增长列表排最后
+                .ThenBy(x => x.TagId)
+                .ToList();
+
+            foreach (var entry in orderedTags)
             {
-                var tagId = kvp.Key;
-                var tagSongs = kvp.Value;
+                var tagId = entry.TagId;
+                var tagSongs = entry.Songs;
+                var tagInfo = entry.TagInfo;
                 
                 if (tagSongs.Count == 0) continue;
 
-                // 获取Tag信息
-                var tagInfo = tagRegistry.GetTag(tagId);
                 string displayName = tagInfo?.DisplayName ?? tagId;
                 
                 var defaultAlbumId = $"{tagId}_default";

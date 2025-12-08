@@ -45,6 +45,7 @@ C:\Users\<你的用户名>\AppData\LocalLow\Nestopi\Chill With You\Player.log
 - **📋 播放队列管理**：支持手动添加歌曲到队列、清空队列等操作
 - **⏮️ 播放历史记录**：支持"上一首"功能，可回溯最近50首播放记录
 - **💾 播放状态恢复**：自动保存并恢复播放进度、队列、历史记录
+- **🌐 流媒体支持**: 通过插件支持多种流媒体音源
 
 ### 🔊 音频控制
 - **🎛️ 系统媒体控制 (SMTC)**：在 Windows 系统媒体浮窗中显示歌曲信息和封面，支持媒体键控制
@@ -701,3 +702,4 @@ A: 暂不支持配置禁用。如需禁用，请移除 `ChillPatcher` 插件，�
 - [BepInEx](https://github.com/BepInEx/BepInEx) - Unity 游戏模组框架
 - [HarmonyX](https://github.com/BepInEx/HarmonyX) - .NET 运行时方法补丁库
 - [dr_libs](https://github.com/mackron/dr_libs) - flac解码支持
+- [go-musicfox](https://github.com/go-musicfox/go-musicfox) - 流媒体客户端支持

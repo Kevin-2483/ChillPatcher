@@ -113,7 +113,224 @@ namespace ChillPatcher
             DefaultCoverProvider.Initialize();
             CoreAudioLoader.Initialize();
             
+            // 订阅 MusicRegistry 事件以同步到游戏 MusicService
+            SubscribeMusicRegistryEvents();
+            
+            // 订阅 TagRegistry 事件以刷新 UI
+            SubscribeTagRegistryEvents();
+            
             Logger.LogInfo("Core registries and services initialized!");
+        }
+
+        /// <summary>
+        /// 订阅 MusicRegistry 事件以同步到游戏的 MusicService
+        /// </summary>
+        private void SubscribeMusicRegistryEvents()
+        {
+            // 当新歌曲注册时，如果符合当前 Tag 筛选，添加到游戏的播放列表
+            MusicRegistry.Instance.OnMusicRegistered += (musicInfo) =>
+            {
+                try
+                {
+                    // 确保在主线程执行
+                    UIFramework.Audio.MainThreadDispatcher.Instance?.Enqueue(() =>
+                    {
+                        SyncMusicToGameService(musicInfo, isAdd: true);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError($"Error syncing music to game: {ex}");
+                }
+            };
+
+            // 当歌曲注销时，从游戏播放列表移除
+            MusicRegistry.Instance.OnMusicUnregistered += (musicUUID) =>
+            {
+                try
+                {
+                    UIFramework.Audio.MainThreadDispatcher.Instance?.Enqueue(() =>
+                    {
+                        SyncMusicRemovalToGameService(musicUUID);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError($"Error removing music from game: {ex}");
+                }
+            };
+        }
+
+        /// <summary>
+        /// 订阅 TagRegistry 事件以刷新 Tag 列表 UI
+        /// </summary>
+        private void SubscribeTagRegistryEvents()
+        {
+            TagRegistry.Instance.OnTagRegistered += (tagInfo) =>
+            {
+                try
+                {
+                    Logger.LogDebug($"[TagSync] New tag registered: {tagInfo.DisplayName}");
+                    
+                    // 确保在主线程执行 UI 刷新
+                    UIFramework.Audio.MainThreadDispatcher.Instance?.Enqueue(() =>
+                    {
+                        Patches.UIFramework.MusicTagListUI_Patches.RefreshCustomTagButtons();
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError($"Error refreshing tag UI: {ex}");
+                }
+            };
+        }
+
+        /// <summary>
+        /// 同步单首歌曲到游戏的 MusicService
+        /// </summary>
+        private static void SyncMusicToGameService(SDK.Models.MusicInfo musicInfo, bool isAdd)
+        {
+            try
+            {
+                var musicService = Patches.UIFramework.MusicService_RemoveLimit_Patch.CurrentInstance;
+                if (musicService == null)
+                {
+                    Logger.LogWarning($"[MusicSync] MusicService not available, skipping sync for: {musicInfo.Title}");
+                    return;
+                }
+
+                // 检查歌曲的 Tag 是否在当前选中的 Tag 中
+                var tagInfo = TagRegistry.Instance?.GetTag(musicInfo.TagId);
+                if (tagInfo == null)
+                {
+                    Logger.LogWarning($"[MusicSync] Tag not found for music: {musicInfo.Title} (TagId: {musicInfo.TagId})");
+                    return;
+                }
+
+                // 创建 GameAudioInfo
+                var gameAudio = ConvertToGameAudioInfo(musicInfo, tagInfo);
+                if (gameAudio == null)
+                {
+                    Logger.LogWarning($"[MusicSync] Failed to convert MusicInfo to GameAudioInfo: {musicInfo.Title}");
+                    return;
+                }
+
+                // 添加到 _allMusicList（持久化，Tag 变动时不会丢失）
+                var allMusicList = Traverse.Create(musicService)
+                    .Field("_allMusicList")
+                    .GetValue<List<GameAudioInfo>>();
+                
+                if (allMusicList != null && !allMusicList.Any(a => a.UUID == gameAudio.UUID))
+                {
+                    allMusicList.Add(gameAudio);
+                    Logger.LogInfo($"[MusicSync] Added to AllMusicList: {musicInfo.Title}");
+                }
+
+                // 如果当前 Tag 选中，也添加到 CurrentPlayList
+                var currentAudioTag = SaveDataManager.Instance.MusicSetting.CurrentAudioTag.CurrentValue;
+                if (currentAudioTag.HasFlagFast((AudioTag)tagInfo.BitValue))
+                {
+                    var currentPlayList = musicService.CurrentPlayList;
+                    if (currentPlayList != null && !currentPlayList.Any(a => a.UUID == gameAudio.UUID))
+                    {
+                        currentPlayList.Add(gameAudio);
+                        Logger.LogDebug($"[MusicSync] Added to CurrentPlayList: {musicInfo.Title}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"[MusicSync] Error syncing music: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// 将 MusicInfo 转换为 GameAudioInfo
+        /// </summary>
+        private static GameAudioInfo ConvertToGameAudioInfo(SDK.Models.MusicInfo musicInfo, SDK.Models.TagInfo tagInfo)
+        {
+            try
+            {
+                // 确定 AudioMode
+                AudioMode pathType;
+                switch (musicInfo.SourceType)
+                {
+                    case SDK.Models.MusicSourceType.File:
+                        pathType = AudioMode.LocalPc;
+                        break;
+                    case SDK.Models.MusicSourceType.Url:
+                    case SDK.Models.MusicSourceType.Stream:
+                        pathType = AudioMode.LocalPc;  // 流媒体也使用 LocalPc 模式，由我们的加载器处理
+                        break;
+                    default:
+                        pathType = AudioMode.LocalPc;
+                        break;
+                }
+
+                // 构造 Tag（模块 Tag + 收藏状态）
+                AudioTag tag = (AudioTag)tagInfo.BitValue;
+                
+                // 如果歌曲已收藏，添加 Favorite 标记
+                if (musicInfo.IsFavorite)
+                {
+                    tag |= AudioTag.Favorite;
+                }
+
+                // 创建 GameAudioInfo（使用对象初始化器）
+                var gameAudio = new GameAudioInfo
+                {
+                    UUID = musicInfo.UUID,
+                    Title = musicInfo.Title ?? "",
+                    Credit = musicInfo.Artist ?? "",
+                    Tag = tag,
+                    IsUnlocked = musicInfo.IsUnlocked,
+                    PathType = pathType,
+                    LocalPath = musicInfo.SourcePath ?? "",
+                    AudioClip = null  // 延迟加载
+                };
+
+                return gameAudio;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"[ConvertToGameAudioInfo] Error: {ex}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 从游戏的 MusicService 移除歌曲
+        /// </summary>
+        private static void SyncMusicRemovalToGameService(string musicUUID)
+        {
+            try
+            {
+                var musicService = Patches.UIFramework.MusicService_RemoveLimit_Patch.CurrentInstance;
+                if (musicService == null)
+                    return;
+
+                // 检查是否是当前正在播放的歌曲
+                bool isCurrentlyPlaying = musicService.PlayingMusic?.UUID == musicUUID;
+
+                var currentPlayList = musicService.CurrentPlayList;
+                var toRemove = currentPlayList?.FirstOrDefault(a => a.UUID == musicUUID);
+                if (toRemove != null)
+                {
+                    currentPlayList.Remove(toRemove);
+                    Logger.LogInfo($"[MusicSync] Removed from CurrentPlayList: {musicUUID}");
+                }
+
+                // 如果移除的是当前播放的歌曲，自动播放下一首
+                if (isCurrentlyPlaying)
+                {
+                    Logger.LogInfo($"[MusicSync] Current playing song was removed, skipping to next...");
+                    musicService.SkipCurrentMusic(MusicChangeKind.Auto).Forget();
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"[MusicSync] Error removing music: {ex}");
+            }
         }
 
         /// <summary>
@@ -225,13 +442,20 @@ namespace ChillPatcher
                     continue;
                 }
 
+                // 构造 AudioTag（模块 Tag + Local + 收藏状态）
+                AudioTag audioTag = (AudioTag)tag.BitValue | AudioTag.Local;
+                if (musicInfo.IsFavorite)
+                {
+                    audioTag |= AudioTag.Favorite;
+                }
+
                 // 创建 GameAudioInfo
                 var gameAudio = new GameAudioInfo
                 {
                     UUID = musicInfo.UUID,
                     Title = musicInfo.Title,
                     Credit = musicInfo.Artist,
-                    Tag = (AudioTag)tag.BitValue | AudioTag.Local,
+                    Tag = audioTag,
                     PathType = AudioMode.LocalPc,
                     LocalPath = musicInfo.SourcePath,
                     IsUnlocked = true

@@ -99,6 +99,13 @@ namespace ChillPatcher.SDK.Models
         public bool IsFavorite { get; set; }
 
         /// <summary>
+        /// 是否可删除
+        /// 默认跟随模块的 CanDelete 设置，但可以单独覆盖
+        /// null 表示使用模块默认设置
+        /// </summary>
+        public bool? IsDeletable { get; set; } = null;
+
+        /// <summary>
         /// 创建时间
         /// </summary>
         public DateTime CreatedAt { get; set; } = DateTime.Now;

@@ -74,6 +74,42 @@ namespace ChillPatcher.Patches.UIFramework
         }
         
         /// <summary>
+        /// 刷新自定义 Tag 按钮（供模块在运行时添加 Tag 后调用）
+        /// </summary>
+        public static void RefreshCustomTagButtons()
+        {
+            try
+            {
+                var tagListUI = UnityEngine.Object.FindObjectOfType<MusicTagListUI>();
+                if (tagListUI == null)
+                {
+                    Plugin.Log.LogWarning("[RefreshCustomTagButtons] Cannot find MusicTagListUI");
+                    return;
+                }
+                
+                // 检查是否有模块注册了标签
+                bool hasModuleTags = TagRegistry.Instance?.GetAllTags()?.Count > 0;
+                if (!hasModuleTags)
+                {
+                    Plugin.Log.LogDebug("[RefreshCustomTagButtons] No module tags registered");
+                    return;
+                }
+                
+                // 重新添加自定义 Tag 按钮
+                AddCustomTagButtons(tagListUI);
+                
+                // 更新下拉框高度
+                UpdateDropdownHeight(tagListUI);
+                
+                Plugin.Log.LogInfo("[RefreshCustomTagButtons] Custom tag buttons refreshed");
+            }
+            catch (System.Exception ex)
+            {
+                Plugin.Log.LogError($"Error in RefreshCustomTagButtons: {ex}");
+            }
+        }
+        
+        /// <summary>
         /// 打印按钮高度调试信息（延迟执行以确保布局已更新）
         /// </summary>
         private static void DebugPrintButtonHeights(MusicTagListUI tagListUI)
@@ -360,16 +396,24 @@ namespace ChillPatcher.Patches.UIFramework
                 var currentTag = SaveDataManager.Instance.MusicSetting.CurrentAudioTag.Value;
                 bool hasTag = currentTag.HasFlagFast((AudioTag)customTag.BitValue);
 
-                // ✅ 使用位运算切换
-                if (hasTag)
+                // ✅ 处理增长列表的互斥逻辑
+                if (customTag.IsGrowableList)
                 {
-                    SaveDataManager.Instance.MusicSetting.CurrentAudioTag.Value = currentTag.RemoveFlag((AudioTag)customTag.BitValue);
-                    Plugin.Log.LogInfo($"[CustomTag] Removed: {customTag.DisplayName} ({customTag.BitValue})");
+                    HandleGrowableTagClick(customTag, hasTag, currentTag, tagListUI);
                 }
                 else
                 {
-                    SaveDataManager.Instance.MusicSetting.CurrentAudioTag.Value = currentTag.AddFlag((AudioTag)customTag.BitValue);
-                    Plugin.Log.LogInfo($"[CustomTag] Added: {customTag.DisplayName} ({customTag.BitValue})");
+                    // 普通 Tag：使用位运算切换
+                    if (hasTag)
+                    {
+                        SaveDataManager.Instance.MusicSetting.CurrentAudioTag.Value = currentTag.RemoveFlag((AudioTag)customTag.BitValue);
+                        Plugin.Log.LogInfo($"[CustomTag] Removed: {customTag.DisplayName} ({customTag.BitValue})");
+                    }
+                    else
+                    {
+                        SaveDataManager.Instance.MusicSetting.CurrentAudioTag.Value = currentTag.AddFlag((AudioTag)customTag.BitValue);
+                        Plugin.Log.LogInfo($"[CustomTag] Added: {customTag.DisplayName} ({customTag.BitValue})");
+                    }
                 }
 
                 // 更新按钮UI
@@ -381,6 +425,62 @@ namespace ChillPatcher.Patches.UIFramework
                 // ✅ CurrentAudioTag变化会自动触发游戏的筛选逻辑！
                 // 不需要手动调用ApplyFilter，游戏已经订阅了ReactiveProperty
             });
+        }
+
+        /// <summary>
+        /// 处理增长列表 Tag 的点击（互斥逻辑）
+        /// </summary>
+        private static void HandleGrowableTagClick(TagInfo clickedTag, bool wasActive, AudioTag currentTag, MusicTagListUI tagListUI)
+        {
+            var tagRegistry = TagRegistry.Instance;
+            if (tagRegistry == null)
+                return;
+
+            if (wasActive)
+            {
+                // 取消选中：移除该增长列表
+                SaveDataManager.Instance.MusicSetting.CurrentAudioTag.Value = currentTag.RemoveFlag((AudioTag)clickedTag.BitValue);
+                tagRegistry.SetCurrentGrowableTag(null);
+                Plugin.Log.LogInfo($"[GrowableTag] Removed: {clickedTag.DisplayName}");
+            }
+            else
+            {
+                // 选中：先移除其他增长列表，再添加当前
+                var newTag = currentTag;
+                
+                // 移除其他增长列表 Tag
+                var otherGrowableTags = tagRegistry.GetGrowableTags();
+                foreach (var otherTag in otherGrowableTags)
+                {
+                    if (otherTag.TagId != clickedTag.TagId)
+                    {
+                        newTag = newTag.RemoveFlag((AudioTag)otherTag.BitValue);
+                        
+                        // 更新其他增长列表按钮的UI状态
+                        UpdateGrowableTagButtonUI(otherTag.TagId, false, tagListUI);
+                    }
+                }
+                
+                // 添加当前增长列表
+                newTag = newTag.AddFlag((AudioTag)clickedTag.BitValue);
+                SaveDataManager.Instance.MusicSetting.CurrentAudioTag.Value = newTag;
+                tagRegistry.SetCurrentGrowableTag(clickedTag.TagId);
+                
+                Plugin.Log.LogInfo($"[GrowableTag] Added (exclusive): {clickedTag.DisplayName}");
+            }
+        }
+
+        /// <summary>
+        /// 更新指定增长列表 Tag 按钮的 UI 状态
+        /// </summary>
+        private static void UpdateGrowableTagButtonUI(string tagId, bool isChecked, MusicTagListUI tagListUI)
+        {
+            var buttonObj = _customTagButtons.FirstOrDefault(b => b.name == $"CustomTag_{tagId}");
+            if (buttonObj != null)
+            {
+                var btn = buttonObj.GetComponent<MusicTagListButton>();
+                btn?.SetCheck(isChecked);
+            }
         }
 
         /// <summary>

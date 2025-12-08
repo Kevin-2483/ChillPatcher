@@ -214,8 +214,31 @@ namespace ChillPatcher.ModuleSystem.Registry
 
             lock (_lock)
             {
-                if (_music.ContainsKey(music.UUID))
+                if (_music.TryGetValue(music.UUID, out var oldMusic))
                 {
+                    // 如果 AlbumId 发生变化，需要更新索引
+                    if (oldMusic.AlbumId != music.AlbumId)
+                    {
+                        // 从旧专辑的索引中移除
+                        if (!string.IsNullOrEmpty(oldMusic.AlbumId) && _musicByAlbum.TryGetValue(oldMusic.AlbumId, out var oldAlbumList))
+                        {
+                            oldAlbumList.Remove(music.UUID);
+                        }
+                        
+                        // 添加到新专辑的索引
+                        if (!string.IsNullOrEmpty(music.AlbumId))
+                        {
+                            if (!_musicByAlbum.ContainsKey(music.AlbumId))
+                            {
+                                _musicByAlbum[music.AlbumId] = new List<string>();
+                            }
+                            if (!_musicByAlbum[music.AlbumId].Contains(music.UUID))
+                            {
+                                _musicByAlbum[music.AlbumId].Add(music.UUID);
+                            }
+                        }
+                    }
+                    
                     _music[music.UUID] = music;
                     OnMusicUpdated?.Invoke(music);
                 }

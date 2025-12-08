@@ -48,7 +48,13 @@ namespace ChillPatcher.SDK.Interfaces
         /// <summary>无损 (FLAC)</summary>
         Lossless = 3,
         /// <summary>Hi-Res (24bit)</summary>
-        HiRes = 4
+        HiRes = 4,
+        /// <summary>高清环绕声</summary>
+        JYEffect = 5,
+        /// <summary>沉浸环绕声</summary>
+        Sky = 6,
+        /// <summary>超清母带</summary>
+        JYMaster = 7
     }
 
     #endregion
@@ -69,6 +75,12 @@ namespace ChillPatcher.SDK.Interfaces
 
         /// <summary>总 PCM 帧数（0 表示未知/流式）</summary>
         public ulong TotalFrames { get; set; }
+
+        /// <summary>音频格式 ("mp3", "flac" 等)</summary>
+        public string Format { get; set; }
+
+        /// <summary>是否支持 Seek</summary>
+        public bool CanSeek { get; set; }
 
         /// <summary>时长（秒），0 表示未知</summary>
         public float Duration => TotalFrames > 0 && SampleRate > 0 
@@ -113,11 +125,52 @@ namespace ChillPatcher.SDK.Interfaces
         long ReadFrames(float[] buffer, int framesToRead);
 
         /// <summary>
-        /// 定位到指定帧（可选实现）
+        /// 定位到指定帧
         /// </summary>
         /// <param name="frameIndex">目标帧索引</param>
-        /// <returns>是否成功</returns>
+        /// <returns>是否成功（或已设置延迟 Seek）</returns>
         bool Seek(ulong frameIndex);
+
+        #region Seek 支持（流媒体扩展）
+
+        /// <summary>
+        /// 是否支持 Seek 操作
+        /// 流媒体在缓存下载完成前可能不支持
+        /// </summary>
+        bool CanSeek { get; }
+
+        /// <summary>
+        /// 是否有待定的 Seek 操作（缓存未完成时设置的延迟 Seek）
+        /// </summary>
+        bool HasPendingSeek { get; }
+
+        /// <summary>
+        /// 待定 Seek 的目标帧（-1 表示无待定）
+        /// </summary>
+        long PendingSeekFrame { get; }
+
+        /// <summary>
+        /// 取消待定的 Seek 操作
+        /// </summary>
+        void CancelPendingSeek();
+
+        #endregion
+
+        #region 缓存进度（流媒体扩展）
+
+        /// <summary>
+        /// 缓存下载进度（0-100）
+        /// 边下边播时，可用于显示缓冲进度
+        /// 如果不支持或不适用，返回 -1
+        /// </summary>
+        double CacheProgress { get; }
+
+        /// <summary>
+        /// 缓存是否下载完成
+        /// </summary>
+        bool IsCacheComplete { get; }
+
+        #endregion
     }
 
     #endregion

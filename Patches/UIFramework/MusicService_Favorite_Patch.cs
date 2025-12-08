@@ -15,6 +15,12 @@ namespace ChillPatcher.Patches.UIFramework
     public class MusicService_Favorite_Patch
     {
         /// <summary>
+        /// 收藏状态变化事件 (songUUID, isFavorite)
+        /// 用于通知 UI 刷新
+        /// </summary>
+        public static event Action<string, bool> OnSongFavoriteChanged;
+
+        /// <summary>
         /// 拦截添加收藏
         /// </summary>
         [HarmonyPatch("RegisterFavoriteMusic")]
@@ -43,6 +49,9 @@ namespace ChillPatcher.Patches.UIFramework
                         IsFavorite = true,
                         ModuleId = musicInfo.ModuleId
                     });
+                    
+                    // 触发 UI 刷新事件
+                    OnSongFavoriteChanged?.Invoke(gameAudioInfo.UUID, true);
                     
                     Plugin.Log.LogInfo($"[Favorite] Module song favorited: {gameAudioInfo.UUID}");
                     return false; // 不执行原逻辑
@@ -104,6 +113,9 @@ namespace ChillPatcher.Patches.UIFramework
                         IsFavorite = false,
                         ModuleId = musicInfo.ModuleId
                     });
+                    
+                    // 触发 UI 刷新事件
+                    OnSongFavoriteChanged?.Invoke(gameAudioInfo.UUID, false);
                     
                     Plugin.Log.LogInfo($"[Favorite] Module song unfavorited: {gameAudioInfo.UUID}");
                     return false; // 不执行原逻辑

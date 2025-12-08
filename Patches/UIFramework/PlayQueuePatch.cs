@@ -115,8 +115,13 @@ namespace ChillPatcher.Patches.UIFramework
             // 获取当前播放列表和随机设置
             bool isShuffle = musicService.IsShuffle;
             
-            // 从队列获取下一首
-            var nextAudio = queueManager.AdvanceToNext(currentPlaylist, isShuffle, isExcludedFunc);
+            // 从队列获取下一首（使用异步版本支持增长列表）
+            var nextAudio = await queueManager.AdvanceToNextAsync(
+                currentPlaylist, 
+                isShuffle, 
+                isExcludedFunc,
+                () => GetPlaylistForQueue(musicService)  // 获取更新后的播放列表
+            );
             
             if (nextAudio == null)
             {
@@ -294,15 +299,25 @@ namespace ChillPatcher.Patches.UIFramework
                 nextAudio = queueManager.CurrentPlaying;
                 if (nextAudio == null)
                 {
-                    nextAudio = queueManager.AdvanceToNext(currentPlaylist, isShuffle, isExcludedFunc);
+                    nextAudio = await queueManager.AdvanceToNextAsync(
+                        currentPlaylist, 
+                        isShuffle, 
+                        isExcludedFunc,
+                        () => GetPlaylistForQueue(musicService)
+                    );
                 }
             }
             else
             {
-                // 跳过 nextCount 首（使用队列系统）
+                // 跳过 nextCount 首（使用队列系统异步版本）
                 for (int i = 0; i < nextCount; i++)
                 {
-                    nextAudio = queueManager.AdvanceToNext(currentPlaylist, isShuffle, isExcludedFunc);
+                    nextAudio = await queueManager.AdvanceToNextAsync(
+                        currentPlaylist, 
+                        isShuffle, 
+                        isExcludedFunc,
+                        () => GetPlaylistForQueue(musicService)
+                    );
                     if (nextAudio == null) break;
                 }
             }
@@ -405,7 +420,35 @@ namespace ChillPatcher.Patches.UIFramework
             
             // 更新队列管理器
             var queueManager = PlayQueueManager.Instance;
-            queueManager.SetCurrentPlaying(audio, updatePosition: true, newPosition: (index + 1) % currentPlaylist.Count);
+            
+            // 检查是否点击的是增长列表的最后一首歌曲
+            // 如果是，先触发加载更多，确保指针不会回到第一首
+            int newPosition = (index + 1) % currentPlaylist.Count;
+            bool isLastSong = (index == currentPlaylist.Count - 1);
+            
+            if (isLastSong && MusicUI_VirtualScroll_Patch.IsInGrowableListMode())
+            {
+                Plugin.Log.LogInfo($"[PlayQueuePatch] 点击增长列表最后一首，先触发加载更多...");
+                
+                // 异步加载更多
+                var loadedCount = await MusicUI_VirtualScroll_Patch.TriggerLoadMoreAsync();
+                
+                if (loadedCount > 0)
+                {
+                    // 加载成功，重新获取播放列表（可能已更新）
+                    var updatedPlaylist = musicService.CurrentPlayList;
+                    
+                    // 如果列表已增长，新位置应该是原来的 index + 1
+                    // 而不是回到 0
+                    if (updatedPlaylist.Count > currentPlaylist.Count)
+                    {
+                        newPosition = index + 1;  // 不取模，直接指向新加载的第一首
+                        Plugin.Log.LogInfo($"[PlayQueuePatch] 列表已增长: {currentPlaylist.Count} -> {updatedPlaylist.Count}, 新位置: {newPosition}");
+                    }
+                }
+            }
+            
+            queueManager.SetCurrentPlaying(audio, updatePosition: true, newPosition: newPosition);
             
             // 停止当前播放
             var playingMusic = musicService.PlayingMusic;
@@ -507,8 +550,25 @@ namespace ChillPatcher.Patches.UIFramework
             else
             {
                 // 非队列视图：普通播放更新队列管理器
+                // 注意：增长列表相关的处理移到异步方法中
                 queueManager.SetCurrentPlaying(audioInfo);
-                queueManager.SetPlaylistPositionByAudio(audioInfo, __instance.CurrentPlayList);
+                
+                // 检查是否是增长列表的最后一首，如果是则需要异步处理
+                var currentPlaylist = __instance.CurrentPlayList;
+                int index = FindAudioIndex(audioInfo, currentPlaylist);
+                bool isLastSong = index >= 0 && index == currentPlaylist.Count - 1;
+                bool isGrowableMode = MusicUI_VirtualScroll_Patch.IsInGrowableListMode();
+                
+                if (isLastSong && isGrowableMode)
+                {
+                    // 增长列表最后一首，需要异步处理
+                    Plugin.Log.LogInfo($"[PlayQueuePatch] 点击增长列表最后一首: {audioInfo.AudioClipName}, 启动异步处理");
+                    PlayArugumentMusicWithGrowableAsync(__instance, audioInfo, changeKind, index).Forget();
+                    return false;  // 跳过原方法
+                }
+                
+                // 普通情况：直接设置指针
+                queueManager.SetPlaylistPositionByAudio(audioInfo, currentPlaylist);
             }
             
             // 检查是否需要异步加载
@@ -531,9 +591,66 @@ namespace ChillPatcher.Patches.UIFramework
         }
         
         /// <summary>
+        /// 在播放列表中查找歌曲索引
+        /// </summary>
+        private static int FindAudioIndex(GameAudioInfo audio, IReadOnlyList<GameAudioInfo> playlist)
+        {
+            if (audio == null || playlist == null) return -1;
+            
+            for (int i = 0; i < playlist.Count; i++)
+            {
+                if (playlist[i].UUID == audio.UUID)
+                    return i;
+            }
+            return -1;
+        }
+        
+        /// <summary>
+        /// 异步播放增长列表中的歌曲（先触发加载更多）
+        /// </summary>
+        private static async UniTaskVoid PlayArugumentMusicWithGrowableAsync(
+            MusicService musicService, 
+            GameAudioInfo audioInfo, 
+            MusicChangeKind changeKind,
+            int originalIndex)
+        {
+            var queueManager = PlayQueueManager.Instance;
+            var originalCount = musicService.CurrentPlayList.Count;
+            
+            // 先触发加载更多
+            Plugin.Log.LogInfo($"[PlayQueuePatch] 触发增长列表加载更多...");
+            var loadedCount = await MusicUI_VirtualScroll_Patch.TriggerLoadMoreAsync();
+            
+            // 设置播放指针
+            if (loadedCount > 0)
+            {
+                // 加载成功，新位置指向新加载的第一首
+                int newPosition = originalIndex + 1;
+                queueManager.SetPlaylistPosition(newPosition);
+                Plugin.Log.LogInfo($"[PlayQueuePatch] 列表已增长: {originalCount} -> {musicService.CurrentPlayList.Count}, 新位置: {newPosition}");
+            }
+            else
+            {
+                // 加载失败，回到开头
+                queueManager.SetPlaylistPositionByAudio(audioInfo, musicService.CurrentPlayList);
+            }
+            
+            // 继续播放
+            await PlayArugumentMusicCoreAsync(musicService, audioInfo, changeKind);
+        }
+        
+        /// <summary>
         /// 异步播放指定歌曲
         /// </summary>
         private static async UniTaskVoid PlayArugumentMusicAsync(MusicService musicService, GameAudioInfo audioInfo, MusicChangeKind changeKind)
+        {
+            await PlayArugumentMusicCoreAsync(musicService, audioInfo, changeKind);
+        }
+        
+        /// <summary>
+        /// 异步播放的核心逻辑
+        /// </summary>
+        private static async UniTask PlayArugumentMusicCoreAsync(MusicService musicService, GameAudioInfo audioInfo, MusicChangeKind changeKind)
         {
             // 设置加载标志，防止 UpdateFacility 在加载期间调用 PauseMusic
             FacilityMusic_UpdateFacility_Patch.IsLoadingMusic = true;

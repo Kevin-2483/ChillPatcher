@@ -3,6 +3,7 @@ using ChillPatcher.Patches.UIFramework;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace ChillPatcher.UIFramework.Music
 {
@@ -721,6 +722,42 @@ namespace ChillPatcher.UIFramework.Music
         }
         
         /// <summary>
+        /// 播放完成，前进到下一首（异步版本，支持增长列表）
+        /// </summary>
+        /// <param name="currentPlaylist">当前播放列表（原始列表，不要提前过滤）</param>
+        /// <param name="isShuffle">是否随机模式</param>
+        /// <param name="isExcludedFunc">检查歌曲是否被排除的函数（可选，如果为 null 则不检查排除）</param>
+        /// <param name="getUpdatedPlaylistFunc">获取更新后播放列表的函数（在加载更多后调用）</param>
+        /// <returns>下一首要播放的歌曲，如果没有则返回 null</returns>
+        public async Task<GameAudioInfo> AdvanceToNextAsync(
+            IReadOnlyList<GameAudioInfo> currentPlaylist, 
+            bool isShuffle, 
+            Func<GameAudioInfo, bool> isExcludedFunc = null,
+            Func<IReadOnlyList<GameAudioInfo>> getUpdatedPlaylistFunc = null)
+        {
+            // 移除当前播放的（第一个）
+            if (_queue.Count > 0)
+            {
+                _queue.RemoveAt(0);
+            }
+            
+            // 如果队列还有歌曲，播放下一个（队列中的歌曲不检查排除，因为是用户手动添加的）
+            if (_queue.Count > 0)
+            {
+                var next = _queue[0];
+                // 添加到历史记录
+                AddToHistory(next);
+                OnCurrentChanged?.Invoke(next);
+                OnQueueChanged?.Invoke();
+                Plugin.Log.LogInfo($"[Queue] Advanced to next in queue: {next.AudioClipName}");
+                return next;
+            }
+            
+            // 队列为空，从播放列表补充
+            return await FillFromPlaylistAsync(currentPlaylist, isShuffle, isExcludedFunc, getUpdatedPlaylistFunc);
+        }
+        
+        /// <summary>
         /// 从播放列表补充一首到队列（会跳过排除的歌曲）
         /// </summary>
         /// <param name="currentPlaylist">原始播放列表</param>
@@ -799,6 +836,119 @@ namespace ChillPatcher.UIFramework.Music
             // 添加到队列
             _queue.Add(next);
             // 添加到历史记录
+            AddToHistory(next);
+            OnCurrentChanged?.Invoke(next);
+            OnQueueChanged?.Invoke();
+            
+            return next;
+        }
+        
+        /// <summary>
+        /// 从播放列表补充一首到队列（异步版本，支持增长列表）
+        /// </summary>
+        /// <param name="currentPlaylist">原始播放列表</param>
+        /// <param name="isShuffle">是否随机模式</param>
+        /// <param name="isExcludedFunc">检查歌曲是否被排除的函数</param>
+        /// <param name="getUpdatedPlaylistFunc">获取更新后播放列表的函数</param>
+        private async Task<GameAudioInfo> FillFromPlaylistAsync(
+            IReadOnlyList<GameAudioInfo> currentPlaylist, 
+            bool isShuffle, 
+            Func<GameAudioInfo, bool> isExcludedFunc,
+            Func<IReadOnlyList<GameAudioInfo>> getUpdatedPlaylistFunc)
+        {
+            if (currentPlaylist == null || currentPlaylist.Count == 0)
+            {
+                Plugin.Log.LogWarning("[Queue] Cannot fill: playlist is empty");
+                return null;
+            }
+            
+            GameAudioInfo next = null;
+            int playlistCount = currentPlaylist.Count;
+            
+            // 检查是否在增长列表模式，以及是否接近末尾
+            bool isGrowableMode = MusicUI_VirtualScroll_Patch.IsInGrowableListMode();
+            bool isNearEnd = !isShuffle && (PlaylistPosition >= playlistCount - 2 || PlaylistPosition == 0);
+            
+            // 如果是增长列表且接近末尾，先触发加载更多
+            if (isGrowableMode && isNearEnd)
+            {
+                Plugin.Log.LogInfo($"[Queue] 顺序播放接近增长列表末尾 (position={PlaylistPosition}, count={playlistCount})，触发加载更多...");
+                
+                var loadedCount = await MusicUI_VirtualScroll_Patch.TriggerLoadMoreAsync();
+                
+                if (loadedCount > 0 && getUpdatedPlaylistFunc != null)
+                {
+                    // 获取更新后的播放列表
+                    currentPlaylist = getUpdatedPlaylistFunc();
+                    playlistCount = currentPlaylist.Count;
+                    Plugin.Log.LogInfo($"[Queue] 列表已更新，新数量: {playlistCount}");
+                }
+            }
+            
+            if (isShuffle)
+            {
+                // 随机模式：随机选一首，如果被排除则重试
+                var random = new System.Random();
+                
+                for (int attempt = 0; attempt < playlistCount; attempt++)
+                {
+                    int randomIndex = random.Next(playlistCount);
+                    var candidate = currentPlaylist[randomIndex];
+                    
+                    bool isExcluded = isExcludedFunc?.Invoke(candidate) ?? false;
+                    if (!isExcluded)
+                    {
+                        next = candidate;
+                        PlaylistPosition = (randomIndex + 1) % playlistCount;
+                        OnPlaylistPositionChanged?.Invoke(PlaylistPosition);
+                        Plugin.Log.LogInfo($"[Queue] Filled from playlist (shuffle): {next.AudioClipName}, new position: {PlaylistPosition}");
+                        break;
+                    }
+                }
+                
+                if (next == null)
+                {
+                    Plugin.Log.LogWarning("[Queue] Cannot fill: all songs are excluded");
+                    return null;
+                }
+            }
+            else
+            {
+                // 顺序模式
+                for (int i = 0; i < playlistCount; i++)
+                {
+                    int index = (PlaylistPosition + i) % playlistCount;
+                    var candidate = currentPlaylist[index];
+                    
+                    bool isExcluded = isExcludedFunc?.Invoke(candidate) ?? false;
+                    if (!isExcluded)
+                    {
+                        next = candidate;
+                        // 如果是增长列表且到达末尾，不取模
+                        if (isGrowableMode && index == playlistCount - 1)
+                        {
+                            // 不设置新位置，保持在末尾等待下次加载
+                            PlaylistPosition = index + 1;  // 可能超过 Count，下次加载后就不会取模回0
+                        }
+                        else
+                        {
+                            PlaylistPosition = (index + 1) % playlistCount;
+                        }
+                        OnPlaylistPositionChanged?.Invoke(PlaylistPosition);
+                        Plugin.Log.LogInfo($"[Queue] Filled from playlist (sequential): {next.AudioClipName}, new position: {PlaylistPosition}");
+                        break;
+                    }
+                }
+                
+                if (next == null)
+                {
+                    Plugin.Log.LogWarning("[Queue] Cannot fill: all songs are excluded");
+                    return null;
+                }
+            }
+            
+            // 添加到队列
+            _queue.Add(next);
             AddToHistory(next);
             OnCurrentChanged?.Invoke(next);
             OnQueueChanged?.Invoke();

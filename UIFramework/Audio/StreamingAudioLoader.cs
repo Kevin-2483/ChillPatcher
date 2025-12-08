@@ -220,6 +220,9 @@ namespace ChillPatcher.UIFramework.Audio
 
                 // 注册到 AudioResourceManager 以便后续清理
                 AudioResourceManager.Instance?.RegisterPcmStreamReader(source.UUID, clip, reader);
+                
+                // 设置活跃的 PCM 读取器（用于 Seek 操作）
+                Patches.UIFramework.MusicService_SetProgress_Patch.SetActivePcmReader(reader);
 
                 Plugin.Log.LogInfo($"[StreamingAudioLoader] ✅ PCM stream clip created: {clip.name}");
                 return clip;
@@ -270,6 +273,13 @@ namespace ChillPatcher.UIFramework.Audio
         private static void OnPcmSetPositionCallback(IPcmStreamReader reader, int position)
         {
             if (reader == null) return;
+
+            // 如果是从 SetProgress 发起的 Seek，跳过这个回调
+            // 因为 SetProgress 已经调用过 reader.Seek() 了
+            if (Patches.UIFramework.MusicService_SetProgress_Patch.IsSeekingFromSetProgress)
+            {
+                return;
+            }
 
             try
             {

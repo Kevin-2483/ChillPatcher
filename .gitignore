@@ -1,4 +1,9 @@
-bin/
+﻿bin/
 obj/
 release/
 packages/
+build/
+
+# Netease bridge built artifacts (Go DLL)
+netease_bridge/*.dll
+netease_bridge/*.h

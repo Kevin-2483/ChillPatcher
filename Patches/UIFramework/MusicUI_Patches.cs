@@ -100,6 +100,12 @@ namespace ChillPatcher.Patches.UIFramework
                         // 订阅单曲排除状态变化事件
                         MusicService_Excluded_Patch.OnSongExcludedChanged += OnSongExcludedChangedHandler;
                         
+                        // 订阅收藏状态变化事件（用于刷新删除按钮显示）
+                        MusicService_Favorite_Patch.OnSongFavoriteChanged += OnSongFavoriteChangedHandler;
+                        
+                        // 订阅滚动到底部事件（用于增长列表）
+                        musicManager.MixedVirtualScroll.OnScrollToBottom += OnScrollToBottomHandler;
+                        
                         _mixedComponentsInitialized = true;
                         Plugin.Log.LogInfo("MixedVirtualScrollController initialized (with album separators)");
                     }
@@ -253,19 +259,21 @@ namespace ChillPatcher.Patches.UIFramework
 
         /// <summary>
         /// 专辑切换事件处理器
+        /// 切换专辑下所有歌曲的排除状态
         /// </summary>
         private static void OnAlbumToggleHandler(string albumId)
         {
             try
             {
                 var albumRegistry = AlbumRegistry.Instance;
-                if (albumRegistry == null)
+                var musicRegistry = MusicRegistry.Instance;
+                if (albumRegistry == null || musicRegistry == null)
                 {
-                    Plugin.Log.LogWarning("AlbumRegistry not initialized");
+                    Plugin.Log.LogWarning("Registry not initialized");
                     return;
                 }
 
-                // 获取专辑信息以得到 tagId
+                // 获取专辑信息
                 var albumInfo = albumRegistry.GetAlbum(albumId);
                 if (albumInfo == null)
                 {
@@ -273,11 +281,41 @@ namespace ChillPatcher.Patches.UIFramework
                     return;
                 }
 
-                var tagId = albumInfo.TagId;
-                
-                // TODO: ToggleAlbumEnabled 功能暂未在 AlbumRegistry 中实现
-                // 需要在 AlbumRegistry 中添加专辑启用/禁用状态管理功能
-                Plugin.Log.LogWarning($"Album toggle not implemented yet for album: {albumInfo.DisplayName} (TagId: {tagId})");
+                // 获取模块的 IFavoriteExcludeHandler
+                var moduleLoader = ModuleSystem.ModuleLoader.Instance;
+                if (moduleLoader == null)
+                {
+                    Plugin.Log.LogWarning("ModuleLoader not initialized");
+                    return;
+                }
+
+                var module = moduleLoader.GetModule(albumInfo.ModuleId);
+                var excludeHandler = module as SDK.Interfaces.IFavoriteExcludeHandler;
+                if (excludeHandler == null)
+                {
+                    Plugin.Log.LogWarning($"Module {albumInfo.ModuleId} does not support exclude");
+                    return;
+                }
+
+                // 获取专辑下的所有歌曲
+                var songs = musicRegistry.GetMusicByAlbum(albumId);
+                if (songs == null || songs.Count == 0)
+                {
+                    Plugin.Log.LogWarning($"No songs in album: {albumId}");
+                    return;
+                }
+
+                // 检查当前状态：如果有任何歌曲未排除，则视为启用状态
+                bool hasEnabledSong = songs.Any(s => !excludeHandler.IsExcluded(s.UUID));
+                bool newExcludedState = hasEnabledSong; // 如果有启用的歌曲，则全部排除
+
+                Plugin.Log.LogInfo($"Album toggle: {albumInfo.DisplayName}, setting excluded={newExcludedState} for {songs.Count} songs");
+
+                // 批量设置排除状态
+                foreach (var song in songs)
+                {
+                    excludeHandler.SetExcluded(song.UUID, newExcludedState);
+                }
 
                 // 刷新播放列表以更新显示
                 RefreshPlaylistDisplay();
@@ -304,6 +342,234 @@ namespace ChillPatcher.Patches.UIFramework
             {
                 Plugin.Log.LogError($"Error handling song excluded change: {ex}");
             }
+        }
+
+        /// <summary>
+        /// 单曲收藏状态变化事件处理器
+        /// </summary>
+        private static void OnSongFavoriteChangedHandler(string songUUID, bool isFavorite)
+        {
+            try
+            {
+                Plugin.Log.LogDebug($"Song favorite state changed: {songUUID} -> {(isFavorite ? "favorite" : "unfavorite")}");
+                
+                // 刷新播放列表以更新删除按钮显示状态
+                RefreshPlaylistDisplay();
+            }
+            catch (System.Exception ex)
+            {
+                Plugin.Log.LogError($"Error handling song favorite change: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// 防抖标志：防止触底事件重复触发
+        /// </summary>
+        private static bool _isLoadingMore = false;
+        private static System.DateTime _lastBottomOutTime = System.DateTime.MinValue;
+        private static readonly System.TimeSpan _bottomOutDebounce = System.TimeSpan.FromSeconds(1);
+
+        /// <summary>
+        /// 公共方法：异步触发增长列表加载更多
+        /// 可供其他 Patch（如 PlayQueuePatch）调用
+        /// </summary>
+        /// <returns>新加载的歌曲数量，0 表示没有增长列表或加载失败</returns>
+        public static async Task<int> TriggerLoadMoreAsync()
+        {
+            // 获取当前选中的增长列表 Tag
+            var tagRegistry = TagRegistry.Instance;
+            var growableTag = tagRegistry?.GetCurrentGrowableTag();
+            
+            // 如果没有通过按钮设置，检查当前选中的 Tag 中是否包含增长 Tag
+            if (growableTag == null)
+            {
+                var currentAudioTag = SaveDataManager.Instance?.MusicSetting?.CurrentAudioTag?.Value;
+                if (currentAudioTag != null)
+                {
+                    var growableTags = tagRegistry?.GetGrowableTags();
+                    if (growableTags != null)
+                    {
+                        foreach (var gt in growableTags)
+                        {
+                            if (currentAudioTag.Value.HasFlagFast((AudioTag)gt.BitValue))
+                            {
+                                growableTag = gt;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (growableTag == null || growableTag.LoadMoreCallback == null)
+            {
+                return 0;
+            }
+
+            Plugin.Log.LogInfo($"[GrowableList] 触发加载更多: {growableTag.DisplayName}");
+
+            try
+            {
+                var loadedCount = await growableTag.LoadMoreCallback();
+                
+                if (loadedCount > 0)
+                {
+                    OnGrowableListLoaded(growableTag.TagId, loadedCount);
+                }
+                
+                Plugin.Log.LogInfo($"[GrowableList] 加载更多完成: {loadedCount} 首");
+                return loadedCount;
+            }
+            catch (System.Exception ex)
+            {
+                Plugin.Log.LogError($"[GrowableList] 加载更多失败: {ex}");
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// 检查当前是否在增长列表模式下
+        /// </summary>
+        public static bool IsInGrowableListMode()
+        {
+            var tagRegistry = TagRegistry.Instance;
+            var growableTag = tagRegistry?.GetCurrentGrowableTag();
+            
+            if (growableTag != null)
+                return true;
+            
+            // 检查当前选中的 Tag 中是否包含增长 Tag
+            var currentAudioTag = SaveDataManager.Instance?.MusicSetting?.CurrentAudioTag?.Value;
+            if (currentAudioTag != null)
+            {
+                var growableTags = tagRegistry?.GetGrowableTags();
+                if (growableTags != null)
+                {
+                    foreach (var gt in growableTags)
+                    {
+                        if (currentAudioTag.Value.HasFlagFast((AudioTag)gt.BitValue))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+            
+            return false;
+        }
+
+        /// <summary>
+        /// 滚动到底部事件处理器 - 用于增长列表加载更多
+        /// 同时支持两种模式：
+        /// 1. 回调模式：如果 Tag 有 LoadMoreCallback，直接调用
+        /// 2. 事件模式：总是发布 GrowableListBottomOutEvent，模块可以订阅处理
+        /// </summary>
+        private static async void OnScrollToBottomHandler()
+        {
+            try
+            {
+                // 防抖
+                var now = System.DateTime.Now;
+                if (_isLoadingMore || (now - _lastBottomOutTime) < _bottomOutDebounce)
+                    return;
+
+                // 获取当前选中的增长列表 Tag
+                var tagRegistry = TagRegistry.Instance;
+                
+                // 优先使用通过按钮点击设置的当前增长 Tag
+                var growableTag = tagRegistry?.GetCurrentGrowableTag();
+                
+                // 如果没有通过按钮设置，检查当前选中的 Tag 中是否包含增长 Tag
+                if (growableTag == null)
+                {
+                    var currentAudioTag = SaveDataManager.Instance?.MusicSetting?.CurrentAudioTag?.Value;
+                    if (currentAudioTag != null)
+                    {
+                        var growableTags = tagRegistry?.GetGrowableTags();
+                        if (growableTags != null)
+                        {
+                            foreach (var gt in growableTags)
+                            {
+                                if (currentAudioTag.Value.HasFlagFast((AudioTag)gt.BitValue))
+                                {
+                                    growableTag = gt;
+                                    Plugin.Log.LogInfo($"[GrowableList] 检测到当前选中包含增长 Tag: {gt.DisplayName}");
+                                    break; // 只处理第一个匹配的增长 Tag
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if (growableTag == null)
+                {
+                    // 没有增长列表，忽略
+                    return;
+                }
+
+                _lastBottomOutTime = now;
+                _isLoadingMore = true;
+
+                Plugin.Log.LogInfo($"[GrowableList] 触底: {growableTag.DisplayName}");
+
+                var eventBus = ModuleSystem.EventBus.Instance;
+                int loadedCount = 0;
+                bool hasCallback = growableTag.LoadMoreCallback != null;
+
+                // 发布触底事件（事件模式），让模块可以订阅
+                eventBus?.Publish(new SDK.Events.GrowableListBottomOutEvent
+                {
+                    TagId = growableTag.TagId,
+                    TagInfo = growableTag,
+                    CurrentSongCount = MusicRegistry.Instance?.GetMusicByTag(growableTag.TagId)?.Count ?? 0,
+                    ReportLoaded = (count) => OnGrowableListLoaded(growableTag.TagId, count)
+                });
+
+                // 如果 Tag 有回调，也调用回调（回调模式）
+                if (hasCallback)
+                {
+                    Plugin.Log.LogInfo($"[GrowableList] 使用回调模式加载更多...");
+                    loadedCount = await growableTag.LoadMoreCallback();
+                    Plugin.Log.LogInfo($"[GrowableList] 回调完成，新增 {loadedCount} 首歌曲");
+
+                    if (loadedCount > 0)
+                    {
+                        OnGrowableListLoaded(growableTag.TagId, loadedCount);
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Plugin.Log.LogError($"Error handling scroll to bottom: {ex}");
+            }
+            finally
+            {
+                _isLoadingMore = false;
+            }
+        }
+
+        /// <summary>
+        /// 增长列表加载完成后的处理
+        /// 可以由回调模式调用，也可以由模块通过 ReportLoaded 调用
+        /// </summary>
+        private static void OnGrowableListLoaded(string tagId, int loadedCount)
+        {
+            if (loadedCount <= 0)
+                return;
+
+            Plugin.Log.LogInfo($"[GrowableList] 加载完成: TagId={tagId}, 新增 {loadedCount} 首歌曲");
+
+            // 发布加载完成事件
+            var eventBus = ModuleSystem.EventBus.Instance;
+            eventBus?.Publish(new SDK.Events.GrowableListLoadedEvent
+            {
+                TagId = tagId,
+                LoadedCount = loadedCount,
+                HasMore = loadedCount > 0
+            });
+
+            // 刷新播放列表显示
+            RefreshPlaylistDisplay();
         }
 
         /// <summary>

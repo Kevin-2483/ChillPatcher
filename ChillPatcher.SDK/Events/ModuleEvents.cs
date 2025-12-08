@@ -412,4 +412,61 @@ namespace ChillPatcher.SDK.Events
     }
 
     #endregion
+
+    #region 增长列表事件
+
+    /// <summary>
+    /// 增长列表触底事件
+    /// 当用户滚动到增长列表 Tag 对应歌曲的底部时触发
+    /// 模块可以选择：
+    /// 1. 订阅此事件并调用 ReportLoaded() 来通知完成
+    /// 2. 或在注册 Tag 时提供 LoadMoreCallback（两种方式可同时使用）
+    /// </summary>
+    public class GrowableListBottomOutEvent : ModuleEventBase
+    {
+        /// <summary>
+        /// 触底的 Tag ID (增长列表)
+        /// </summary>
+        public string TagId { get; set; }
+
+        /// <summary>
+        /// 触底的 Tag 信息
+        /// </summary>
+        public TagInfo TagInfo { get; set; }
+
+        /// <summary>
+        /// 当前列表中该 Tag 下的歌曲数量
+        /// </summary>
+        public int CurrentSongCount { get; set; }
+
+        /// <summary>
+        /// 用于报告加载完成的回调
+        /// 模块加载完数据后应调用此方法通知主插件刷新 UI
+        /// </summary>
+        public System.Action<int> ReportLoaded { get; set; }
+    }
+
+    /// <summary>
+    /// 增长列表加载完成事件
+    /// 当 LoadMoreCallback 执行完成后触发
+    /// </summary>
+    public class GrowableListLoadedEvent : ModuleEventBase
+    {
+        /// <summary>
+        /// Tag ID
+        /// </summary>
+        public string TagId { get; set; }
+
+        /// <summary>
+        /// 新加载的歌曲数量
+        /// </summary>
+        public int LoadedCount { get; set; }
+
+        /// <summary>
+        /// 是否还有更多数据
+        /// </summary>
+        public bool HasMore { get; set; }
+    }
+
+    #endregion
 }

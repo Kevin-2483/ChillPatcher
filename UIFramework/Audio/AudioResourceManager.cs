@@ -175,6 +175,12 @@ namespace ChillPatcher.UIFramework.Audio
             {
                 try
                 {
+                    // 如果清理的是当前活跃的读取器，清除它
+                    if (pcmReader != null && pcmReader == Patches.UIFramework.MusicService_SetProgress_Patch.ActivePcmReader)
+                    {
+                        Patches.UIFramework.MusicService_SetProgress_Patch.ClearActivePcmReader();
+                    }
+                    
                     pcmReader?.Dispose();
                     _logger.LogDebug($"Disposed IPcmStreamReader for ClipID: {clipId}");
                 }

@@ -5,6 +5,7 @@
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <AssemblyName>ChillPatcher</AssemblyName>
@@ -29,10 +30,26 @@
     <Compile Remove="ChillPatcher.Module.LocalFolder\**" />
     <EmbeddedResource Remove="ChillPatcher.Module.LocalFolder\**" />
     <None Remove="ChillPatcher.Module.LocalFolder\**" />
-    <!-- Exclude librime sources -->
-    <Compile Remove="librime\**" />
-    <EmbeddedResource Remove="librime\**" />
-    <None Remove="librime\**" />
+    <!-- Exclude Netease module sources (built separately) -->
+    <Compile Remove="ChillPatcher.Module.Netease\**" />
+    <EmbeddedResource Remove="ChillPatcher.Module.Netease\**" />
+    <None Remove="ChillPatcher.Module.Netease\**" />
+    <!-- Exclude rime sources (librime, rime-schemas, etc.) -->
+    <Compile Remove="rime\**" />
+    <EmbeddedResource Remove="rime\**" />
+    <None Remove="rime\**" />
+    <!-- Exclude netease_bridge sources (Go code, built separately) -->
+    <Compile Remove="netease_bridge\**" />
+    <EmbeddedResource Remove="netease_bridge\**" />
+    <None Remove="netease_bridge\**" />
+    <!-- Exclude build directory -->
+    <Compile Remove="build\**" />
+    <EmbeddedResource Remove="build\**" />
+    <None Remove="build\**" />
+    <!-- Exclude NeteaseTest project -->
+    <Compile Remove="NeteaseTest\**" />
+    <EmbeddedResource Remove="NeteaseTest\**" />
+    <None Remove="NeteaseTest\**" />
   </ItemGroup>
 
   <ItemGroup>
@@ -131,6 +148,10 @@
     </Reference>
     <Reference Include="UnityEngine.UnityWebRequestAudioModule">
       <HintPath>F:\SteamLibrary\steamapps\common\wallpaper_engine\projects\myprojects\chill_with_you\Chill With You_Data\Managed\UnityEngine.UnityWebRequestAudioModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UnityWebRequestTextureModule">
+      <HintPath>F:\SteamLibrary\steamapps\common\wallpaper_engine\projects\myprojects\chill_with_you\Chill With You_Data\Managed\UnityEngine.UnityWebRequestTextureModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
   </ItemGroup>

@@ -21,6 +21,7 @@ namespace ChillPatcher.Patches.UIFramework
     /// 修复方案：
     /// 1. 额外检查 MusicManager.IsPlaying()，如果有任何音乐正在播放，则不执行暂停
     /// 2. 添加 IsLoadingMusic 标志，在异步加载期间阻止暂停
+    /// 3. 添加 IsWaitingForSeek 标志，在等待缓存下载完成时阻止进度条更新
     /// </summary>
     [HarmonyPatch]
     public static class FacilityMusic_UpdateFacility_Patch
@@ -29,6 +30,17 @@ namespace ChillPatcher.Patches.UIFramework
         /// 是否正在加载音乐（异步加载期间设为 true）
         /// </summary>
         public static bool IsLoadingMusic { get; set; } = false;
+        
+        /// <summary>
+        /// 是否正在等待 Seek（缓存下载中设为 true）
+        /// 当此标志为 true 时，进度条不会更新
+        /// </summary>
+        public static bool IsWaitingForSeek { get; set; } = false;
+
+        /// <summary>
+        /// 等待 Seek 的目标进度（0-1）
+        /// </summary>
+        public static float PendingSeekProgress { get; set; } = 0f;
         
         /// <summary>
         /// 拦截 UpdateFacility，修复流媒体播放时的状态判断
@@ -66,6 +78,7 @@ namespace ChillPatcher.Patches.UIFramework
             if (player != null)
             {
                 // 原始逻辑：有播放器，更新进度条
+                // MusicService_GetProgress_Patch 会处理流媒体的特殊情况（等待 Seek 等）
                 musicUI.UpdateProgressBar(musicService.GetCurrentMusicProgress());
                 return false; // 跳过原始方法
             }
@@ -86,6 +99,7 @@ namespace ChillPatcher.Patches.UIFramework
             {
                 // 有音乐正在播放（可能是流媒体），更新进度条
                 // 但不调用 PauseMusic()
+                // MusicService_GetProgress_Patch 会处理流媒体的特殊情况（等待 Seek 等）
                 musicUI.UpdateProgressBar(musicService.GetCurrentMusicProgress());
                 Plugin.Log.LogDebug("[FacilityMusic_Patch] Music is playing via streaming, skipping pause");
                 return false; // 跳过原始方法

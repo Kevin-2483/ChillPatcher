@@ -71,12 +71,33 @@ namespace ChillPatcher.UIFramework.Music
             set => _isPaused = value;
         }
 
+        /// <summary>
+        /// 当前滚动百分比 (0=顶部, 1=底部)
+        /// </summary>
+        public float ScrollPercentage
+        {
+            get
+            {
+                if (_scrollRect == null)
+                    return 0f;
+                // verticalNormalizedPosition: 1=顶部, 0=底部
+                return 1f - _scrollRect.verticalNormalizedPosition;
+            }
+        }
+
+        #endregion
+
+        #region Constants
+
+        private const float SCROLL_TO_BOTTOM_THRESHOLD = 0.95f;
+
         #endregion
 
         #region Events
 
         public event Action<int, int> OnVisibleRangeChanged;
         public event Action<string> OnAlbumToggle;  // 专辑切换事件
+        public event Action OnScrollToBottom;       // 滚动到底部事件
 
         #endregion
 
@@ -208,6 +229,12 @@ namespace ChillPatcher.UIFramework.Music
                 _visibleStartIndex = start;
                 _visibleEndIndex = end;
                 OnVisibleRangeChanged?.Invoke(start, end);
+            }
+
+            // 检查是否滚动到底部
+            if (ScrollPercentage >= SCROLL_TO_BOTTOM_THRESHOLD)
+            {
+                OnScrollToBottom?.Invoke();
             }
         }
 

@@ -95,6 +95,10 @@ namespace ChillPatcher.ModuleSystem.Services
         /// </summary>
         private async Task LoadAlbumCoverAsync(string albumId)
         {
+            // 强制异步执行，确保在 SetDataSource 和 UI 渲染之后触发事件
+            // 这对于同步返回封面的模块（如网易云模块）至关重要
+            await Task.Yield();
+            
             try
             {
                 var sprite = await TryGetAlbumCoverFromModuleAsync(albumId);
@@ -125,6 +129,10 @@ namespace ChillPatcher.ModuleSystem.Services
         /// </summary>
         private async Task LoadMusicCoverAsync(string uuid)
         {
+            // 强制异步执行，确保在 SetDataSource 和 UI 渲染之后触发事件
+            // 这对于同步返回封面的模块至关重要
+            await Task.Yield();
+            
             try
             {
                 var sprite = await TryGetMusicCoverFromModuleAsync(uuid);

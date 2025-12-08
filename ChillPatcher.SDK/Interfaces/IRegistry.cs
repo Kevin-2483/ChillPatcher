@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using ChillPatcher.SDK.Models;
 
 namespace ChillPatcher.SDK.Interfaces
@@ -10,12 +12,29 @@ namespace ChillPatcher.SDK.Interfaces
     {
         /// <summary>
         /// 注册一个新的 Tag
+        /// Tag 是否为增长 Tag 取决于是否包含 IsGrowableAlbum=true 的专辑
         /// </summary>
         /// <param name="tagId">Tag 唯一标识符</param>
         /// <param name="displayName">显示名称</param>
         /// <param name="moduleId">所属模块 ID</param>
         /// <returns>注册成功的 Tag 信息</returns>
         TagInfo RegisterTag(string tagId, string displayName, string moduleId);
+
+        /// <summary>
+        /// 为 Tag 设置加载更多回调
+        /// 当 Tag 被标记为增长 Tag 后，需要设置回调
+        /// </summary>
+        /// <param name="tagId">Tag ID</param>
+        /// <param name="loadMoreCallback">加载更多回调</param>
+        void SetLoadMoreCallback(string tagId, Func<Task<int>> loadMoreCallback);
+
+        /// <summary>
+        /// 标记 Tag 为增长 Tag (由 AlbumRegistry 在注册增长专辑时自动调用)
+        /// 一个 Tag 只能有一个增长专辑，增长 Tag 互斥选中
+        /// </summary>
+        /// <param name="tagId">Tag ID</param>
+        /// <param name="growableAlbumId">增长专辑 ID</param>
+        void MarkAsGrowableTag(string tagId, string growableAlbumId);
 
         /// <summary>
         /// 注销 Tag
@@ -52,6 +71,16 @@ namespace ChillPatcher.SDK.Interfaces
         /// 注销指定模块的所有 Tag
         /// </summary>
         void UnregisterAllByModule(string moduleId);
+
+        /// <summary>
+        /// 获取当前选中的增长列表 Tag (如果有)
+        /// </summary>
+        TagInfo GetCurrentGrowableTag();
+
+        /// <summary>
+        /// 获取所有增长列表 Tag
+        /// </summary>
+        IReadOnlyList<TagInfo> GetGrowableTags();
     }
 
     /// <summary>
