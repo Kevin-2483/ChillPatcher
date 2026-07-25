@@ -63,7 +63,9 @@ namespace ChillPatcher.UIFramework.Audio
             }
 
             // Create clip with duration plus a 5-second safety margin
-            int bufferFrames = (int)(sampleRate * (duration + 5f));
+            const double maxClipDurationSeconds = 12d * 60d * 60d;
+            double clipDuration = Math.Min((double)duration + 5d, maxClipDurationSeconds);
+            int bufferFrames = (int)Math.Min(sampleRate * clipDuration, int.MaxValue - 1024d);
             Plugin.Log.LogInfo($"[StreamingLoader] Creating streaming AudioClip for {uuid} with duration {duration:F1}s (bufferFrames: {bufferFrames})");
 
             var clip = AudioClip.Create(

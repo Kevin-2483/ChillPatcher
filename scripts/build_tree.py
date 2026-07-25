@@ -27,7 +27,7 @@ _GENERATED_ASSETS = ["ChillPatcher.zip", "FH6OmniBridge.zip", "version_info.json
 
 
 def _clean_generated_assets() -> bool:
-    """删除 gui_flutter/assets/ 中由构建脚本生成的文件。"""
+    """删除 gui_flutter/assets/ 中由构建脚本生成的文件，避免跨构建残留。"""
     assets_dir = C.PLAYER_FLUTTER_DIR / "assets"
     if not assets_dir.exists():
         return True
@@ -51,7 +51,7 @@ def build_tree(mode: str, full: bool, skip_flutter: bool) -> list[TaskNode]:
     if mode in ("all", "player"):
         roots.append(_backend(full, skip_flutter))
         roots.append(_media_generator())
-        roots.append(_flutter_gui(full, skip_flutter))
+        roots.append(_flutter_gui(full, skip_flutter, include_mod_assets=mode == "all"))
         roots.append(_assemble_playerbuild())
         roots.append(_installer())
 
@@ -162,17 +162,18 @@ def _media_generator() -> TaskNode:
 #  根 3: Flutter GUI App
 # ════════════════════════════════════════════
 
-def _flutter_gui(full: bool, skip_flutter: bool) -> TaskNode:
+def _flutter_gui(full: bool, skip_flutter: bool, include_mod_assets: bool) -> TaskNode:
     g = TaskNode("📱 Flutter GUI App",
         "Flutter Windows 桌面应用\n"
         "  产物: omni_mix_player.exe + omnimix_audio.dll\n"
-        "  assets/ 内嵌: ChillPatcher.zip + FH6OmniBridge.zip")
+        "  assets/ 内嵌: FH6OmniBridge.zip"
+        + (" + ChillPatcher.zip" if include_mod_assets else ""))
 
     if skip_flutter:
         g.create_leaf("Flutter GUI (跳过)", "",
                       run_fn=lambda: TaskStatus.DISABLED)
-        # 即使跳过 Flutter, assets 里的 zip 还是要构建
-        g.children.append(_chillpatcher_asset(full))
+        if include_mod_assets:
+            g.children.append(_chillpatcher_asset(full))
         g.children.append(_fh6_asset(full))
         return g
 
@@ -193,8 +194,9 @@ def _flutter_gui(full: bool, skip_flutter: bool) -> TaskNode:
                   run_fn=lambda: run_cmd(["cargo", "build", "--release"],
                                          cwd=rust_dir))
 
-    # ── 两个 asset zip（必须在 Flutter build 之前，Flutter 编译时打包 assets/）──
-    g.children.append(_chillpatcher_asset(full))
+    # ── 资产必须在 Flutter build 前生成，随后由 Flutter 打入应用包 ──
+    if include_mod_assets:
+        g.children.append(_chillpatcher_asset(full))
     g.children.append(_fh6_asset(full))
 
     g.create_leaf("build windows --release", "编译 Flutter Windows",

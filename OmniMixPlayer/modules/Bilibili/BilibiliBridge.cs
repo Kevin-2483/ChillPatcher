@@ -1,8 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -253,7 +254,14 @@ namespace OmniMixPlayer.Module.Bilibili
                 var playUrlApi = $"https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&fnval=16";
                 var playData = JObject.Parse(await _client.GetStringAsync(playUrlApi))["data"];
 
-                var url = playData["dash"]?["audio"]?[0]?["baseUrl"]?.ToString();
+                var audio = playData["dash"]?["audio"]?[0];
+                var candidates = new List<string>();
+                var primaryUrl = audio?["baseUrl"]?.ToString();
+                if (!string.IsNullOrEmpty(primaryUrl)) candidates.Add(primaryUrl);
+                var backupUrls = audio?["backupUrl"]?.Select(x => x?.ToString());
+                if (backupUrls != null) candidates.AddRange(backupUrls.Where(x => !string.IsNullOrEmpty(x)));
+                var url = candidates.FirstOrDefault(x => Uri.TryCreate(x, UriKind.Absolute, out var uri) && uri.IsDefaultPort)
+                    ?? candidates.FirstOrDefault();
                 if (string.IsNullOrEmpty(url)) url = playData["durl"]?[0]?["url"]?.ToString();
 
                 return url;

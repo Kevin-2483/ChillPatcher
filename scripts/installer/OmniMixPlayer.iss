@@ -4,14 +4,14 @@
 ; =============================================================================
 
 #define MyAppName "OmniMixPlayer"
-#define MyAppVersion "3.0.2"
+#define MyAppVersion "3.0.4"
 #define MyAppPublisher "Kevin-2483"
 #define MyAppURL "https://github.com/Kevin-2483/Chill"
 #define MyAppExeName "omnimix_gui.exe"
 #define MyAppBackendName "OmniMixPlayer.Backend.exe"
 #define MyServiceName "OmniMixPlayerBackend"
 ; SourceDir — 构建时由脚本自动替换为实际 playerbuild 路径
-#define SourceDir "G:/Csharp/Chill/playerbuild"
+#define SourceDir "E:/Document/Github/ChillPatcher/playerbuild"
 
 [Setup]
 AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}}
@@ -30,8 +30,8 @@ DisableDirPage=no
 UsePreviousAppDir=yes
 ; Windows service installation and migration require elevation.
 PrivilegesRequired=admin
-OutputDir=G:/Csharp/Chill/release
-OutputBaseFilename=OmniMixPlayer_V3.0.2_installer
+OutputDir=E:/Document/Github/ChillPatcher/release
+OutputBaseFilename=OmniMixPlayer_V3.0.4_installer
 Compression=lzma2/ultra64
 SolidCompression=yes
 LZMAUseSeparateProcess=yes
