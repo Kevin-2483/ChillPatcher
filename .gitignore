@@ -18,6 +18,7 @@ OmniMixPlayer/gui_flutter/assets/ChillPatcher.zip
 OmniMixPlayer/gui_flutter/assets/version_info.json
 
 .vscode/
+.idea/
 
 *.log
 

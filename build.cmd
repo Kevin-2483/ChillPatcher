@@ -11,7 +11,7 @@ REM 选项:
 REM   --full     完整构建 (clean + restore + 原生插件)
 REM   --skip-flutter  跳过快闪 GUI
 
-python "%~dp0scripts\build_all.py" %*
+python "%~dp0scripts\ci_build.py" %*
 if %errorlevel% neq 0 (
     echo.
     echo Build failed!
