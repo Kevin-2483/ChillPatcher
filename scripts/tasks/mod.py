@@ -52,6 +52,7 @@ def create_mod_tasks(full: bool = False) -> TaskNode:
         create_native_tasks(native_group, [
             "OmniAudioDecoder", "OmniPcmShared", "SpotifyLibrespotBridge",
             "EsbuildBridge", "SmtcBridge", "netease_bridge", "qqmusic_bridge",
+            "kugou_bridge",
         ])
         create_stage_omni_pcm(root)
 
@@ -148,7 +149,7 @@ def _assemble() -> bool:
     # 原生 DLL
     native_src = ROOT / "bin" / "native" / "x64"
     native_dst = MOD_RELEASE / "native" / "x64"
-    native_exclude = {"ChillNetease.dll", "ChillQQMusic.dll"}
+    native_exclude = {"ChillNetease.dll", "ChillQQMusic.dll", "ChillKugou.dll"}
     if native_src.exists():
         native_dst.mkdir(parents=True, exist_ok=True)
         for f in native_src.glob("*.dll"):

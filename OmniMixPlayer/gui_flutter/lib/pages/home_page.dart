@@ -91,9 +91,9 @@ class _HomePageState extends State<HomePage> {
       _executeSendVolume();
     } else {
       _volumeThrottleTimer ??= Timer(Duration(milliseconds: 150 - elapsed), () {
-          _volumeThrottleTimer = null;
-          _executeSendVolume();
-        });
+        _volumeThrottleTimer = null;
+        _executeSendVolume();
+      });
     }
   }
 
@@ -129,12 +129,12 @@ class _HomePageState extends State<HomePage> {
       _executeSendLatency();
     } else {
       _latencyThrottleTimer ??= Timer(
-          Duration(milliseconds: 150 - elapsed),
-          () {
-            _latencyThrottleTimer = null;
-            _executeSendLatency();
-          },
-        );
+        Duration(milliseconds: 150 - elapsed),
+        () {
+          _latencyThrottleTimer = null;
+          _executeSendLatency();
+        },
+      );
     }
   }
 
@@ -848,25 +848,17 @@ class _HomePageState extends State<HomePage> {
   }
 
   List<Track> _filteredSongs() {
-    final sourceSet = widget.state.activePlaylist.map((e) => e.uuid).toSet();
-    var list = _songs.where((s) => sourceSet.contains(s.uuid)).toList();
-    // Fallback: if _songs is empty (offline instance), convert _activePlaylist items
-    if (list.isEmpty &&
-        _songs.isEmpty &&
-        widget.state.activePlaylist.isNotEmpty) {
-      list = widget.state.activePlaylist
-          .map(
-            (q) => Track(
-              uuid: q.uuid,
-              title: q.title,
-              artist: q.artist,
-              albumId: q.albumId,
-              duration: q.duration,
-              moduleId: q.moduleId,
-            ),
-          )
-          .toList();
-    }
+    // activePlaylist is the canonical playback order. Filtering the global
+    // library list by UUID keeps the library/database iteration order instead
+    // and makes an ordered source playlist look shuffled after it is assigned
+    // to an instance. Resolve metadata while iterating activePlaylist so both
+    // the UI and the playback timeline use the same order.
+    final songsByUuid = <String, Track>{
+      for (final song in _songs) song.uuid: song,
+    };
+    var list = widget.state.activePlaylist
+        .map((queued) => songsByUuid[queued.uuid] ?? _songWithFallback(queued))
+        .toList();
     if (_query.isNotEmpty) {
       list = list.where((s) {
         final album = _albumName(s.albumId).toLowerCase();

@@ -30,6 +30,7 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
         private DecoderEngine.OmniFileDecoder _decoder;
 
         private volatile bool _disposed;
+        private int _disposeState;
         private volatile bool _isReady;
         private volatile bool _isEndOfStream;
         private volatile bool _completionTransition;
@@ -428,7 +429,7 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
 
         public void Dispose()
         {
-            if (_disposed) return;
+            if (Interlocked.Exchange(ref _disposeState, 1) != 0) return;
             _disposed = true;
 
             var cache = _cache;

@@ -131,6 +131,7 @@ def _backend(full: bool, skip_flutter: bool) -> TaskNode:
     _module_native = {
         "Netease": "netease_bridge",
         "QQMusic": "qqmusic_bridge",
+        "Kugou": "kugou_bridge",
         "Spotify": "SpotifyLibrespotBridge",
     }
 
@@ -551,6 +552,9 @@ def _build_native(proj: str) -> int:
         return _go_cgo_build(src, "ChillEsbuildBridge.dll", bin64)
     elif proj == "qqmusic_bridge":
         return _go_cgo_build(src, "ChillQQMusic.dll", bin64)
+    elif proj == "kugou_bridge":
+        mod_dst = C.PLAYER_DIR / "modules" / "Kugou" / "native" / "x64"
+        return _go_cgo_build(src, "ChillKugou.dll", mod_dst)
     elif proj == "netease_bridge":
         # netease_bridge 构建逻辑复杂 (clone go-musicfox, patch, etc), 保留 build.bat
         clean_cmake_cache(src)
@@ -806,7 +810,7 @@ def _assemble_mod() -> bool:
     # 原生 DLL
     native_src = C.ROOT / "bin" / "native" / "x64"
     native_dst = C.MOD_RELEASE / "native" / "x64"
-    exclude = {"ChillNetease.dll", "ChillQQMusic.dll",
+    exclude = {"ChillNetease.dll", "ChillQQMusic.dll", "ChillKugou.dll",
                "ChillAudioDecoder.dll", "ChillFlacDecoder.dll"}
     if native_src.exists():
         native_dst.mkdir(parents=True, exist_ok=True)

@@ -412,13 +412,14 @@ NATIVE_PROJECTS_ALWAYS = [
     "OmniAudioDecoder", "OmniPcmShared", "SpotifyLibrespotBridge",
     "EsbuildBridge", "SmtcBridge",
 ]
-NATIVE_PROJECTS_FULL_ONLY = ["netease_bridge", "qqmusic_bridge"]
+NATIVE_PROJECTS_FULL_ONLY = ["netease_bridge", "qqmusic_bridge", "kugou_bridge"]
 
 PLAYER_MODULE_MAP = [
     ("LocalFolder", "com.chillpatcher.localfolder"),
     ("Netease", "com.chillpatcher.netease"),
     ("Bilibili", "com.chillpatcher.bilibili"),
     ("QQMusic", "com.chillpatcher.qqmusic"),
+    ("Kugou", "com.chillpatcher.kugou"),
     ("Spotify", "com.chillpatcher.spotify"),
 ]
 

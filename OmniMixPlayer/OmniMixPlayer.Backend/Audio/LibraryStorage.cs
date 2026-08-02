@@ -220,6 +220,7 @@ namespace OmniMixPlayer.Backend.Audio
         {
             var col = _db.GetCollection<TrackDoc>("tracks");
             IEnumerable<TrackDoc> filtered;
+            Dictionary<string, int> playlistPositions = null;
 
             if (!string.IsNullOrEmpty(query.ModuleId))
                 filtered = col.Find(t => t.ModuleId == query.ModuleId);
@@ -261,10 +262,13 @@ namespace OmniMixPlayer.Backend.Audio
             if (!string.IsNullOrEmpty(query.PlaylistId))
             {
                 var peCol = _db.GetCollection<PlaylistEntryDoc>("playlist_entries");
-                var playlistUuids = new HashSet<string>(
-                    peCol.Find(pe => pe.PlaylistId == query.PlaylistId)
-                          .Select(pe => pe.TrackUuid));
-                filtered = filtered.Where(t => playlistUuids.Contains(t.Uuid));
+                playlistPositions = peCol.Find(pe => pe.PlaylistId == query.PlaylistId)
+                    .GroupBy(pe => pe.TrackUuid, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.Min(entry => entry.Position),
+                        StringComparer.OrdinalIgnoreCase);
+                filtered = filtered.Where(t => playlistPositions.ContainsKey(t.Uuid));
             }
 
             // Sort
@@ -281,6 +285,14 @@ namespace OmniMixPlayer.Backend.Audio
                     TrackSortField.CreatedAt => desc ? filtered.OrderByDescending(t => t.CreatedAt) : filtered.OrderBy(t => t.CreatedAt),
                     _ => filtered
                 };
+            }
+            else if (playlistPositions != null)
+            {
+                // A playlist query without an explicit user sort must preserve
+                // the source playlist order stored in playlist_entries.Position.
+                filtered = filtered
+                    .OrderBy(t => playlistPositions.TryGetValue(t.Uuid, out var position) ? position : int.MaxValue)
+                    .ThenBy(t => t.Uuid, StringComparer.OrdinalIgnoreCase);
             }
 
             if (applyPaging)
