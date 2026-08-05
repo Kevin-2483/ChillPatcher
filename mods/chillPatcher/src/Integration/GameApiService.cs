@@ -70,11 +70,8 @@ namespace ChillPatcher.Integration
                     ["type"] = type.ToString(),
                     ["state"] = getPomodoroStateObject()
                 })).AddTo(_subscriptions);
-                pomodoro.OnUpdateWorkHour.Subscribe(_ => Emit("pomodoroWorkHourUpdated", getPlayerProgressObject())).AddTo(_subscriptions);
-                pomodoro.OnPreAddExpAndPointFromCompletePomodoro.Subscribe(exp => Emit("pomodoroPreReward", new Dictionary<string, object>
-                {
-                    ["exp"] = exp
-                })).AddTo(_subscriptions);
+                // The current game version removed the legacy work-hour and
+                // pre-reward observables, so those legacy events are no longer emitted.
 
                 var levelService = ResolvePlayerLevelService();
                 if (levelService != null)
@@ -221,7 +218,7 @@ namespace ChillPatcher.Integration
                 ["totalWorkSeconds"] = save.PlayerData?.PomodoroTotalWorkSeconds ?? 0d,
                 ["lastWorkStartTimeSeconds"] = svc?.LastWorkStartTimeSeconds ?? float.MinValue,
                 ["lastWorkEndTimeSeconds"] = svc?.LastWorkEndTimeSeconds ?? float.MinValue,
-                ["lastPomodoroTotalWorkHours"] = svc?.LastPomodoroTotalWorkHours ?? 0f,
+                ["lastPomodoroTotalWorkHours"] = 0f,
                 ["isLastFinishedMidway"] = svc?.IsLastPomodoroFinishedMidway ?? false
             };
         }

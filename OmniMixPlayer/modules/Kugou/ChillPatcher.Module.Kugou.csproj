@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <AssemblyName>OmniMixPlayer.Module.Kugou</AssemblyName>
+    <OutputPath>..\..\bin\Modules\Kugou\</OutputPath>
+    <RootNamespace>OmniMixPlayer.Module.Kugou</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\OmniMixPlayer.SDK\OmniMixPlayer.SDK.csproj">
+      <Private>False</Private>
+    </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="QRCoder" Version="1.4.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="native\x64\ChillKugou.dll" Condition="Exists('native\x64\ChillKugou.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>native\x64\ChillKugou.dll</Link>
+    </Content>
+  </ItemGroup>
+</Project>

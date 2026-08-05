@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'dart:ui' show AppExitResponse;
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -62,9 +62,10 @@ void main(List<String> args) async {
   final state = AppState();
   state.init(port: port);
 
-  // Handle window close via WidgetsBindingObserver — works even when
-  // desktop_multi_window hooks the native WndProc.
+  // 拦截原生 WM_CLOSE（X 按钮），WidgetsBindingObserver 无法可靠拦截
   final closeHandler = _CloseHandler(state);
+  await windowManager.setPreventClose(true);
+  windowManager.addListener(closeHandler);
 
   // System tray (desktop only)
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
@@ -121,27 +122,23 @@ void _onNewInstance(List<String> args) {
   windowManager.focus();
 }
 
-/// Intercepts the window close request at the Flutter framework level,
-/// bypassing native WndProc conflicts between window_manager and
-/// desktop_multi_window.
-class _CloseHandler with WidgetsBindingObserver {
+/// 拦截原生窗口关闭按钮，根据 closeBehavior 决定隐藏到托盘还是退出
+class _CloseHandler with WindowListener {
   final AppState state;
 
-  _CloseHandler(this.state) {
-    WidgetsBinding.instance.addObserver(this);
-  }
+  _CloseHandler(this.state);
 
   @override
-  Future<AppExitResponse> didRequestAppExit() async {
+  void onWindowClose() async {
     if (state.closeBehavior == 'minimize') {
       await windowManager.hide();
-      return AppExitResponse.cancel;
+    } else {
+      exit(0);
     }
-    return AppExitResponse.exit;
   }
 
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
+    windowManager.removeListener(this);
   }
 }
 

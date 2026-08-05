@@ -207,6 +207,7 @@ namespace OmniMixPlayer.Backend.Audio
 
         private void PlayTrack(Track track, PlaySource source)
         {
+            CancelPlaybackTask();
             ReleaseCurrentReader(_playingTrack);
             _playingTrack = track;
             SetPlayState(1);
@@ -216,13 +217,14 @@ namespace OmniMixPlayer.Backend.Audio
             _eventBus.Publish(new PlayStartedEvent { Music = track, Source = source });
 
             var gen = Interlocked.Increment(ref _playbackGeneration);
-            _playbackCts?.Cancel();
-            _playbackCts = new CancellationTokenSource();
-            _playbackTask = Task.Run(() => PlaybackLoopAsync(track, gen, _playbackCts.Token));
+            var playbackCts = new CancellationTokenSource();
+            _playbackCts = playbackCts;
+            _playbackTask = Task.Run(() => PlaybackLoopAsync(track, gen, playbackCts.Token));
         }
 
         private void StopInternal(bool clearTimeline)
         {
+            CancelPlaybackTask();
             SetPlayState(0);
             var track = _playingTrack;
             _playingTrack = null;
@@ -234,15 +236,17 @@ namespace OmniMixPlayer.Backend.Audio
 
         private async Task PlaybackLoopAsync(Track track, int generation, CancellationToken ct)
         {
+            IPcmStreamReader reader = null;
             try
             {
                 if (track.SourceType == SourceType.Stream ||
                     track.SourceType == SourceType.Url ||
                     track.SourceType == SourceType.File)
                 {
-                    var reader = await CreateReaderForTrackAsync(track, ct);
+                    reader = await CreateReaderForTrackAsync(track, ct);
 
-                    if (ct.IsCancellationRequested) return;
+                    if (ct.IsCancellationRequested || generation != _playbackGeneration)
+                        return;
 
                     if (reader == null)
                     {
@@ -257,6 +261,9 @@ namespace OmniMixPlayer.Backend.Audio
                                 SDK.Ipc.SharedMemoryStreamError.DecoderFailed);
                             lock (_lock)
                             {
+                                if (ct.IsCancellationRequested || generation != _playbackGeneration)
+                                    return;
+
                                 _eventBus.Publish(new PlayEndedEvent
                                 {
                                     Music = track,
@@ -280,7 +287,12 @@ namespace OmniMixPlayer.Backend.Audio
                         return;
                     }
 
-                    lock (_lock) { _currentReader = reader; }
+                    lock (_lock)
+                    {
+                        if (ct.IsCancellationRequested || generation != _playbackGeneration)
+                            return;
+                        _currentReader = reader;
+                    }
 
                     long totalFramesHint = track.Duration > 0 ? (long)(track.Duration * 44100f) : 0;
                     _sharedMemory?.BeginStream(track.Uuid, totalFramesHint);
@@ -368,9 +380,6 @@ namespace OmniMixPlayer.Backend.Audio
                     if (!ct.IsCancellationRequested)
                         _sharedMemory?.MarkDecoderEof((long)reader.CurrentFrame);
 
-                    reader.Dispose();
-                    lock (_lock) { _currentReader = null; }
-                    _eventBus.Publish(new MusicResourcesReleasedEvent { Music = track });
                 }
                 else
                 {
@@ -381,6 +390,9 @@ namespace OmniMixPlayer.Backend.Audio
                 {
                     lock (_lock)
                     {
+                        if (ct.IsCancellationRequested || generation != _playbackGeneration)
+                            return;
+
                         _eventBus.Publish(new PlayEndedEvent { Music = track, Reason = PlayEndReason.Completed });
 
                         if (ServerControlledPlayback)
@@ -407,6 +419,47 @@ namespace OmniMixPlayer.Backend.Audio
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Playback error for {Uuid}", track.Uuid);
+                if (!ct.IsCancellationRequested && generation == _playbackGeneration)
+                {
+                    _sharedMemory?.MarkError(SDK.Ipc.SharedMemoryStreamError.DecoderFailed);
+                    lock (_lock)
+                    {
+                        if (ct.IsCancellationRequested || generation != _playbackGeneration)
+                            return;
+
+                        _eventBus.Publish(new PlayEndedEvent { Music = track, Reason = PlayEndReason.Failed });
+                        if (ServerControlledPlayback)
+                        {
+                            var result = _timeline.NaturalEnd(Id);
+                            if (!string.IsNullOrWhiteSpace(result.CurrentUuid))
+                                PlayTimelineResult(result, PlaySource.AutoNext);
+                            else
+                                StopInternal(clearTimeline: false);
+                        }
+                        else
+                        {
+                            StopInternal(clearTimeline: false);
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                if (reader != null)
+                {
+                    var ownedCurrentReader = false;
+                    lock (_lock)
+                    {
+                        if (ReferenceEquals(_currentReader, reader))
+                        {
+                            _currentReader = null;
+                            ownedCurrentReader = true;
+                        }
+                    }
+                    reader.Dispose();
+                    if (ownedCurrentReader)
+                        _eventBus.Publish(new MusicResourcesReleasedEvent { Music = track });
+                }
             }
         }
 
@@ -528,6 +581,34 @@ namespace OmniMixPlayer.Backend.Audio
                 _eventBus.Publish(new MusicResourcesReleasedEvent { Music = track });
         }
 
+        private void CancelPlaybackTask()
+        {
+            var cancellation = _playbackCts;
+            var task = _playbackTask;
+            _playbackCts = null;
+            _playbackTask = null;
+            if (cancellation == null) return;
+
+            try { cancellation.Cancel(); }
+            catch (ObjectDisposedException) { }
+
+            if (task == null)
+                return;
+
+            if (task.IsCompleted)
+            {
+                cancellation.Dispose();
+            }
+            else
+            {
+                _ = task.ContinueWith(
+                    _ => cancellation.Dispose(),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+        }
+
         private static Audio.EqualizerState MapEqualizerStateToInternal(SDK.Protos.Models.EqualizerState proto)
         {
             var state = new Audio.EqualizerState
@@ -567,8 +648,6 @@ namespace OmniMixPlayer.Backend.Audio
             if (_disposed) return;
             _disposed = true;
             Stop();
-            _playbackCts?.Cancel();
-            _playbackCts?.Dispose();
             ReleaseCurrentReader(_playingTrack);
         }
     }

@@ -10,6 +10,30 @@ namespace ChillPatcher
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern IntPtr LoadLibrary(string libFilename);
 
+        [DllImport("kernel32.dll", EntryPoint = "LoadLibraryExW", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr LoadLibraryEx(string libFilename, IntPtr file, uint flags);
+
+        private const uint LoadLibrarySearchSystem32 = 0x00000800;
+
+        public static void WarmUpSteamOverlayLoader(BepInEx.Logging.ManualLogSource log)
+        {
+            // Force the API-set loader path to initialize before Steam Overlay
+            // lazily enters it from Mono startup. This avoids an early native
+            // loader crash observed when gameoverlayrenderer64.dll is present.
+            var handle = LoadLibraryEx(
+                "api-ms-win-core-processthreads-l1-1-2",
+                IntPtr.Zero,
+                LoadLibrarySearchSystem32);
+
+            if (handle == IntPtr.Zero)
+            {
+                log.LogWarning($"[Core] System loader warm-up failed: {Marshal.GetLastWin32Error()}");
+                return;
+            }
+
+            log.LogDebug("[Core] System loader warm-up completed");
+        }
+
         public static void EnsureDependencies(BepInEx.Logging.ManualLogSource log)
         {
             try

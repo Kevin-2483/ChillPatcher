@@ -30,10 +30,11 @@ namespace ChillPatcher
 
         private void Awake()
         {
-            BuildSetupOverlay.Show();
-
             Logger = base.Logger;
             Log = Logger;
+
+            CoreDependencyLoader.WarmUpSteamOverlayLoader(Log);
+            BuildSetupOverlay.Show();
 
             PluginPath = Path.GetDirectoryName(Info.Location);
 

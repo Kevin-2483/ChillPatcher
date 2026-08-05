@@ -316,13 +316,7 @@ namespace ChillPatcher.SDK.Ipc
         /// <summary>Query all tracks from native library (no HTTP).</summary>
         public async Task<JToken> GetSongs(string albumId = null, string tagId = null)
         {
-            var query = new OmniPcmTrackQuery
-            {
-                albumId = albumId,
-                tagId = tagId,
-                isExcluded = -1  // no filter on excluded state
-            };
-            var tracks = _native.QueryTracks(query);
+            var tracks = QueryTracksPaged(albumId, tagId, null);
             var arr = new JArray();
             foreach (var t in tracks)
                 arr.Add(new JObject
@@ -343,12 +337,7 @@ namespace ChillPatcher.SDK.Ipc
         /// <summary>Query tracks belonging to a specific playlist source (via refId = playlistId).</summary>
         public async Task<JToken> GetSongsByPlaylist(string playlistId)
         {
-            var query = new OmniPcmTrackQuery
-            {
-                playlistId = playlistId,
-                isExcluded = -1
-            };
-            var tracks = _native.QueryTracks(query);
+            var tracks = QueryTracksPaged(null, null, playlistId);
             var arr = new JArray();
             foreach (var t in tracks)
                 arr.Add(new JObject
@@ -356,6 +345,38 @@ namespace ChillPatcher.SDK.Ipc
                     ["uuid"] = t.uuid,
                 });
             return arr;
+        }
+
+        private List<OmniPcmTrackInfo> QueryTracksPaged(string albumId, string tagId, string playlistId)
+        {
+            const int PageSize = 128;
+            const int MaxTracks = 100000;
+            var result = new List<OmniPcmTrackInfo>();
+
+            for (int offset = 0; offset < MaxTracks;)
+            {
+                var query = new OmniPcmTrackQuery
+                {
+                    albumId = albumId,
+                    tagId = tagId,
+                    playlistId = playlistId,
+                    isExcluded = -1,
+                    limit = PageSize,
+                    offset = offset
+                };
+
+                var page = _native.QueryTracks(query);
+
+                if (page == null || page.Length == 0)
+                    break;
+
+                result.AddRange(page);
+                offset += page.Length;
+                if (page.Length < PageSize)
+                    break;
+            }
+
+            return result;
         }
 
         public async Task<JToken> GetHistory()

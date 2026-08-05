@@ -32,7 +32,8 @@ def create_player_tasks(full: bool = False, skip_flutter: bool = False) -> TaskN
     from .native import create_native_tasks, create_stage_omni_pcm
     create_native_tasks(native_g, [
         "OmniAudioDecoder", "OmniPcmShared", "SpotifyLibrespotBridge",
-        "EsbuildBridge", "SmtcBridge",
+        "EsbuildBridge", "SmtcBridge", "netease_bridge", "qqmusic_bridge",
+        "kugou_bridge",
     ])
     create_stage_omni_pcm(root)
 

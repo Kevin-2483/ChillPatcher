@@ -18,6 +18,7 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
 
         private readonly string _url;
         private readonly string _cachePath;
+        private readonly string _partialPath;
         private readonly Dictionary<string, string> _headers;
 
         private FileStream _writeStream;
@@ -27,7 +28,9 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
         private bool _isComplete;
         private bool _disposed;
         private CancellationTokenSource _cts;
+        private Task _downloadTask;
         private Exception _error;
+        private bool _committed;
 
         /// <summary>已下载的字节数</summary>
         public long Downloaded { get { lock (_lock) return _downloaded; } }
@@ -39,7 +42,11 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
         public bool IsComplete { get { lock (_lock) return _isComplete; } }
 
         /// <summary>缓存文件路径</summary>
-        public string CachePath => _cachePath;
+        public string CachePath => IsComplete ? _cachePath : _partialPath;
+
+        public string FinalPath => _cachePath;
+
+        public string PartialPath => _partialPath;
 
         /// <summary>下载进度 0-100, 未知大小返回 -1</summary>
         public double Progress
@@ -59,6 +66,7 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
         public Exception Error { get { lock (_lock) return _error; } }
 
         public event Action OnComplete;
+        public event Action OnCommitting;
 
         public HttpAudioCache(string url, string cachePath,
             Dictionary<string, string> headers = null,
@@ -66,6 +74,7 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
         {
             _url = url;
             _cachePath = cachePath;
+            _partialPath = $"{cachePath}.{Guid.NewGuid():N}.partial";
             _headers = headers;
             _logger = logger;
             _totalSize = -1;
@@ -80,10 +89,10 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
             if (!Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
 
-            _writeStream = new FileStream(_cachePath, FileMode.Create,
+            _writeStream = new FileStream(_partialPath, FileMode.Create,
                 FileAccess.Write, FileShare.Read);
 
-            Task.Run(() => DownloadLoop(_cts.Token));
+            _downloadTask = Task.Run(() => DownloadLoop(_cts.Token));
         }
 
         private const int MaxRetries = 3;
@@ -106,7 +115,7 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
                         {
                             if (_writeStream == null)
                             {
-                                _writeStream = new FileStream(_cachePath, FileMode.OpenOrCreate,
+                                _writeStream = new FileStream(_partialPath, FileMode.OpenOrCreate,
                                     FileAccess.Write, FileShare.Read);
                                 _writeStream.Seek(_downloaded, SeekOrigin.Begin);
                             }
@@ -144,12 +153,23 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
                                 {
                                     _downloaded = 0;
                                     _writeStream?.Dispose();
-                                    _writeStream = new FileStream(_cachePath, FileMode.Create,
+                                    _writeStream = new FileStream(_partialPath, FileMode.Create,
                                         FileAccess.Write, FileShare.Read);
                                 }
+                                resumeFrom = 0;
                             }
 
-                            if (attempt == 0 && resumeFrom == 0)
+                            if (response.StatusCode == System.Net.HttpStatusCode.PartialContent)
+                            {
+                                var range = response.Content.Headers.ContentRange;
+                                if (range?.From != resumeFrom)
+                                    throw new InvalidDataException($"Unexpected Content-Range start: {range?.From}, expected {resumeFrom}");
+                                if (range.Length.HasValue)
+                                {
+                                    lock (_lock) { _totalSize = range.Length.Value; }
+                                }
+                            }
+                            else if (resumeFrom == 0)
                             {
                                 var contentLength = response.Content.Headers.ContentLength;
                                 lock (_lock) { _totalSize = contentLength ?? -1; }
@@ -173,21 +193,37 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
                         }
                     }
 
+                    long downloaded;
+                    long totalSize;
                     lock (_lock)
                     {
-                        _writeStream?.Flush();
+                        _writeStream?.Flush(true);
                         _writeStream?.Dispose();
                         _writeStream = null;
-                        _isComplete = true;
+                        downloaded = _downloaded;
+                        totalSize = _totalSize;
                     }
 
-                    _logger?.LogInformation($"Download complete: {_downloaded} bytes -> {_cachePath}");
+                    if (totalSize >= 0 && downloaded != totalSize)
+                        throw new InvalidDataException($"Incomplete download: {downloaded} of {totalSize} bytes");
+
+                    OnCommitting?.Invoke();
+
+                    if (File.Exists(_cachePath))
+                        File.Delete(_partialPath);
+                    else
+                        File.Move(_partialPath, _cachePath);
+
+                    lock (_lock) { _committed = true; }
                     OnComplete?.Invoke();
+                    lock (_lock) { _isComplete = true; }
+                    _logger?.LogInformation($"Download complete: {downloaded} bytes -> {_cachePath}");
                     return; // success, exit retry loop
                 }
                 catch (OperationCanceledException)
                 {
                     _logger?.LogInformation("Download cancelled");
+                    CleanupPartial();
                     return;
                 }
                 catch (Exception ex)
@@ -204,9 +240,23 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
                     if (attempt == MaxRetries)
                     {
                         _logger?.LogError($"Download failed after {MaxRetries + 1} attempts: {ex.Message}");
+                        CleanupPartial();
                     }
                 }
             }
+        }
+
+        private void CleanupPartial()
+        {
+            try
+            {
+                bool committed;
+                lock (_lock) { committed = _committed; }
+                if (!committed && File.Exists(_partialPath))
+                    File.Delete(_partialPath);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
 
         public void Dispose()
@@ -219,6 +269,12 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
                 _writeStream?.Dispose();
                 _writeStream = null;
             }
+            var task = _downloadTask;
+            if (task == null || task.IsCompleted)
+                CleanupPartial();
+            else
+                _ = task.ContinueWith(_ => CleanupPartial(), TaskScheduler.Default);
+            _cts?.Dispose();
         }
 
         /// <summary>获取缓存目录路径</summary>

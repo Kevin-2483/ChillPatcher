@@ -265,6 +265,7 @@ namespace ChillPatcher
 
         private CancellationTokenSource _connectionLoopCts;
         private bool _isConnectionLoopRunning;
+        private readonly SemaphoreSlim _connectSemaphore = new SemaphoreSlim(1, 1);
 
         private void StartConnectionLoop()
         {
@@ -335,13 +336,35 @@ namespace ChillPatcher
 
         public async UniTask<bool> ConnectAsync()
         {
-            StartConnectionLoop();
-            if (_connected) return true;
+            if (_connected && _client?.IsConnected == true)
+            {
+                StartConnectionLoop();
+                return true;
+            }
 
-            return await ConnectInternalAsync();
+            var connected = await ConnectInternalAsync();
+            // Start monitoring only after the explicit first connection
+            // attempt completes; otherwise both paths can connect at once.
+            StartConnectionLoop();
+            return connected;
         }
 
         private async UniTask<bool> ConnectInternalAsync()
+        {
+            await _connectSemaphore.WaitAsync();
+            try
+            {
+                if (_connected && _client?.IsConnected == true)
+                    return true;
+                return await ConnectInternalCoreAsync();
+            }
+            finally
+            {
+                _connectSemaphore.Release();
+            }
+        }
+
+        private async UniTask<bool> ConnectInternalCoreAsync()
         {
             try
             {
@@ -649,6 +672,31 @@ namespace ChillPatcher
 
         #region Import songs into game MusicService
 
+        /// <summary>
+        /// The SDK query methods execute synchronous P/Invoke calls despite
+        /// their Task-based signatures. Call this only from a worker thread.
+        /// </summary>
+        private JToken RunLibraryQuery(Func<Task<JToken>> query)
+        {
+            return query().GetAwaiter().GetResult();
+        }
+
+        private JToken QueryPlaylistSourcesWithRetry()
+        {
+            JToken result = null;
+            for (int attempt = 1; attempt <= 5; attempt++)
+            {
+                result = RunLibraryQuery(() => _client.GetPlaylistSources());
+                if (result is JArray array && array.Count > 0)
+                    return result;
+
+                Plugin.Log?.LogDebug($"[OmniMix] Playlist sources not ready; retry {attempt}/5");
+                if (attempt < 5)
+                    Thread.Sleep(200);
+            }
+            return result ?? new JArray();
+        }
+
         public async UniTask<int> ImportSongsToGame(bool replace = false)
         {
             await _importSemaphore.WaitAsync();
@@ -662,9 +710,11 @@ namespace ChillPatcher
                 }
 
                 // ── Phase 1: All native queries (thread-pool safe, P/Invoke) ──
-                var sourcesJson = await _client.GetPlaylistSources();
-                var albumsJson = await _client.GetAlbums();
-                var queueJson = await _client.GetQueue();
+                var sourcesJson = await UniTask.RunOnThreadPool(QueryPlaylistSourcesWithRetry);
+                var albumsJson = await UniTask.RunOnThreadPool(
+                    () => RunLibraryQuery(() => _client.GetAlbums()));
+                var queueJson = await UniTask.RunOnThreadPool(
+                    () => RunLibraryQuery(() => _client.GetQueue()));
 
                 // Build source → tag bit mapping (lock-protected, thread-safe)
                 var sourceTagBits = new List<(string refId, ulong bit, string name)>();
@@ -684,11 +734,13 @@ namespace ChillPatcher
                 }
 
                 // Query all tracks once for metadata, then per-playlist for tag membership
-                var allTracksJson = await _client.GetSongs();
+                var allTracksJson = await UniTask.RunOnThreadPool(
+                    () => RunLibraryQuery(() => _client.GetSongs()));
                 var perSourceResults = new List<(ulong bit, JToken tracks)>();
                 foreach (var (refId, bit, _) in sourceTagBits)
                 {
-                    var tracks = await _client.GetSongsByPlaylist(refId);
+                    var tracks = await UniTask.RunOnThreadPool(
+                        () => RunLibraryQuery(() => _client.GetSongsByPlaylist(refId)));
                     perSourceResults.Add((bit, tracks));
                 }
 
@@ -732,6 +784,8 @@ namespace ChillPatcher
                 var uuidTagBits = new Dictionary<string, ulong>();
                 var songDict = new Dictionary<string, MusicInfo>();
                 var seenUuids = new HashSet<string>();
+                var orderedUuids = new List<string>();
+                var orderedUuidSet = new HashSet<string>();
 
                 if (allTracksJson is JArray allTracksArr)
                 {
@@ -768,6 +822,8 @@ namespace ChillPatcher
                             if (!string.IsNullOrEmpty(uuid) && uuidTagBits.ContainsKey(uuid))
                             {
                                 uuidTagBits[uuid] |= bit;
+                                if (orderedUuidSet.Add(uuid))
+                                    orderedUuids.Add(uuid);
                                 matched++;
                             }
                         }
@@ -816,7 +872,17 @@ namespace ChillPatcher
                             songDict[uuid] = mi;
 
                         uuidTagMap[uuid] = tagValue;
+                        if (orderedUuidSet.Add(uuid))
+                            orderedUuids.Add(uuid);
                     }
+                }
+
+                // Include queue-only or otherwise unassigned imported items
+                // after all source-ordered entries.
+                foreach (var uuid in uuidTagMap.Keys)
+                {
+                    if (orderedUuidSet.Add(uuid))
+                        orderedUuids.Add(uuid);
                 }
 
                 // Cache for UI
@@ -852,10 +918,10 @@ namespace ChillPatcher
                 var newUuids = new HashSet<string>(uuidTagMap.Keys);
                 int addedCount = 0;
 
-                foreach (var kvp in uuidTagMap)
+                foreach (var uuid in orderedUuids)
                 {
-                    var uuid = kvp.Key;
-                    var tagValue = kvp.Value;
+                    if (!uuidTagMap.TryGetValue(uuid, out var tagValue))
+                        continue;
                     if (tagValue == 0) continue;
 
                     if (existingIndex.TryGetValue(uuid, out var idx))
@@ -875,6 +941,25 @@ namespace ChillPatcher
 
                 // Remove imported songs no longer in any playlist source
                 allMusicList.RemoveAll(a => ((ulong)a.Tag & ~31UL) != 0 && !newUuids.Contains(a.UUID));
+
+                // The per-source queries already follow playlist_entries.Position.
+                // Rebuild only the imported segment in that order; dictionary
+                // iteration would otherwise fall back to global-library order.
+                var importedByUuid = new Dictionary<string, GameAudioInfo>();
+                foreach (var audio in allMusicList)
+                {
+                    if (audio != null && ((ulong)audio.Tag & ~31UL) != 0 &&
+                        !string.IsNullOrEmpty(audio.UUID) && !importedByUuid.ContainsKey(audio.UUID))
+                    {
+                        importedByUuid[audio.UUID] = audio;
+                    }
+                }
+                allMusicList.RemoveAll(a => a != null && ((ulong)a.Tag & ~31UL) != 0);
+                foreach (var uuid in orderedUuids)
+                {
+                    if (importedByUuid.TryGetValue(uuid, out var audio))
+                        allMusicList.Add(audio);
+                }
 
                 // Sync to current playlist (use same uuid→tag map, no extra allocations)
                 var currentPlayList = musicService.CurrentPlayList;
@@ -899,17 +984,18 @@ namespace ChillPatcher
                     }
 
                     var currentTag = SaveDataManager.Instance?.MusicSetting?.CurrentAudioTag?.CurrentValue ?? AudioTag.All;
-                    foreach (var kvp in uuidTagMap)
+                    foreach (var uuid in orderedUuids)
                     {
-                        if (kvp.Value == 0) continue;
-                        if (cpIndex.TryGetValue(kvp.Key, out var idx))
+                        if (!uuidTagMap.TryGetValue(uuid, out var tagValue) || tagValue == 0)
+                            continue;
+                        if (cpIndex.TryGetValue(uuid, out var idx))
                         {
-                            currentPlayList[idx].Tag = (AudioTag)kvp.Value;
+                            currentPlayList[idx].Tag = (AudioTag)tagValue;
                         }
-                        else if (currentTag.HasFlagFast((AudioTag)kvp.Value))
+                        else if (currentTag.HasFlagFast((AudioTag)tagValue))
                         {
-                            if (songDict.TryGetValue(kvp.Key, out var mi))
-                                currentPlayList.Add(ConvertToGameAudio(mi, kvp.Value));
+                            if (songDict.TryGetValue(uuid, out var mi))
+                                currentPlayList.Add(ConvertToGameAudio(mi, tagValue));
                         }
                     }
                     // Remove stale imported songs from current playlist
@@ -917,6 +1003,28 @@ namespace ChillPatcher
                     {
                         if (((ulong)currentPlayList[i].Tag & ~31UL) != 0 && !newUuids.Contains(currentPlayList[i].UUID))
                             currentPlayList.RemoveAt(i);
+                    }
+
+                    var currentImportedByUuid = new Dictionary<string, GameAudioInfo>();
+                    for (int i = 0; i < currentPlayList.Count; i++)
+                    {
+                        var audio = currentPlayList[i];
+                        if (audio != null && ((ulong)audio.Tag & ~31UL) != 0 &&
+                            !string.IsNullOrEmpty(audio.UUID) && !currentImportedByUuid.ContainsKey(audio.UUID))
+                        {
+                            currentImportedByUuid[audio.UUID] = audio;
+                        }
+                    }
+                    for (int i = currentPlayList.Count - 1; i >= 0; i--)
+                    {
+                        var audio = currentPlayList[i];
+                        if (audio != null && ((ulong)audio.Tag & ~31UL) != 0)
+                            currentPlayList.RemoveAt(i);
+                    }
+                    foreach (var uuid in orderedUuids)
+                    {
+                        if (currentImportedByUuid.TryGetValue(uuid, out var audio))
+                            currentPlayList.Add(audio);
                     }
                 }
 

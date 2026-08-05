@@ -70,6 +70,7 @@ def create_all_tasks(full: bool = False, skip_flutter: bool = False) -> TaskNode
         _add_native_leaves(nat_g, [
             "OmniAudioDecoder", "OmniPcmShared", "SpotifyLibrespotBridge",
             "EsbuildBridge", "SmtcBridge", "netease_bridge", "qqmusic_bridge",
+            "kugou_bridge",
         ])
 
     mod.create_leaf("Assemble", "组装 → release/ChillPatcher/",
@@ -102,7 +103,8 @@ def create_all_tasks(full: bool = False, skip_flutter: bool = False) -> TaskNode
     pnat = player.create_group("Native Plugins", "播放器需要的原生 DLL")
     _add_native_leaves(pnat, [
         "OmniAudioDecoder", "OmniPcmShared", "SpotifyLibrespotBridge",
-        "EsbuildBridge", "SmtcBridge",
+        "EsbuildBridge", "SmtcBridge", "netease_bridge", "qqmusic_bridge",
+        "kugou_bridge",
     ])
 
     # Flutter Web
@@ -177,9 +179,16 @@ def _make_native_fn(proj: str):
             return TaskStatus.SKIPPED
         clean_cmake_cache(src)
         args = ["build.bat"]
-        if proj in ("netease_bridge", "qqmusic_bridge"):
+        if proj in ("netease_bridge", "qqmusic_bridge", "kugou_bridge"):
             args.append("--no-pause")
-        return run_cmd(args, cwd=src)
+        code = run_cmd(args, cwd=src)
+        if code == 0 and proj == "kugou_bridge":
+            dll = src / "ChillKugou.dll"
+            if dll.exists():
+                dst = PLAYER_DIR / "modules" / "Kugou" / "native" / "x64"
+                dst.mkdir(parents=True, exist_ok=True)
+                copy_file(dll, dst)
+        return code
     return _build
 
 
@@ -264,7 +273,7 @@ def _mod_assemble() -> bool:
     # 原生 DLL (排除后端桥接)
     native_src = ROOT / "bin" / "native" / "x64"
     native_dst = MOD_RELEASE / "native" / "x64"
-    native_exclude = {"ChillNetease.dll", "ChillQQMusic.dll"}
+    native_exclude = {"ChillNetease.dll", "ChillQQMusic.dll", "ChillKugou.dll"}
     if native_src.exists():
         native_dst.mkdir(parents=True, exist_ok=True)
         for f in native_src.glob("*.dll"):

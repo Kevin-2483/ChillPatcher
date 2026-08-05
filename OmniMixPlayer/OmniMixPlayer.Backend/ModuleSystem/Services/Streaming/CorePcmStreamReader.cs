@@ -30,8 +30,11 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
         private DecoderEngine.OmniFileDecoder _decoder;
 
         private volatile bool _disposed;
+        private int _disposeState;
         private volatile bool _isReady;
         private volatile bool _isEndOfStream;
+        private volatile bool _completionTransition;
+        private volatile bool _finalDecoderReady;
         private PcmStreamInfo _info;
 
         private ulong _currentFrame;
@@ -56,7 +59,7 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
             string cacheKey, Dictionary<string, string> headers = null, ILogger logger = null)
         {
             var cachePath = Path.Combine(HttpAudioCache.GetCacheDirectory(),
-                $"{cacheKey}.{format.ToLowerInvariant()}");
+                $"{cacheKey}.v2.{format.ToLowerInvariant()}");
             Init(url, format, durationSeconds, cachePath, headers, logger);
         }
 
@@ -122,7 +125,8 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
             }
 
             // Start HTTP download
-            _cache = new HttpAudioCache(url, cachePath, headers);
+            _cache = new HttpAudioCache(url, cachePath, headers, _logger);
+            _cache.OnCommitting += OnCacheCommitting;
             _cache.OnComplete += OnCacheComplete;
             _cache.StartDownload();
 
@@ -143,11 +147,14 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
 
         private void InitialDecoderOpenLoop()
         {
+            var cache = _cache;
+            if (cache == null) return;
+
             // Wait up to 30s for first 64KB or download complete
             var deadline = DateTime.UtcNow.AddSeconds(30);
             while (!_disposed && DateTime.UtcNow < deadline)
             {
-                if (_cache.Downloaded >= 65536 || _cache.IsComplete)
+                if (cache.Downloaded >= 65536 || cache.IsComplete)
                     break;
                 Thread.Sleep(100);
             }
@@ -156,8 +163,7 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
 
             try
             {
-                OpenDecoder(_cache.CachePath, true);
-                _isReady = true;
+                TryOpenGrowingDecoder(cache);
             }
             catch (Exception ex)
             {
@@ -166,44 +172,92 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
             }
         }
 
+        private void TryOpenGrowingDecoder(HttpAudioCache cache)
+        {
+            lock (_decoderLock)
+            {
+                if (_disposed || _completionTransition || _finalDecoderReady || _decoder != null)
+                    return;
+                OpenDecoderLocked(cache.PartialPath, true);
+                _isReady = true;
+            }
+        }
+
         private void OpenDecoder(string path, bool isGrowing)
         {
             lock (_decoderLock)
             {
-                _decoder?.Dispose();
-                _decoder = new DecoderEngine.OmniFileDecoder(path, isGrowing);
+                OpenDecoderLocked(path, isGrowing);
+            }
+        }
 
-                lock (_lock)
+        private void OpenDecoderLocked(string path, bool isGrowing)
+        {
+            _decoder?.Dispose();
+            _decoder = new DecoderEngine.OmniFileDecoder(path, isGrowing);
+
+            lock (_lock)
+            {
+                _info.SampleRate = _decoder.SampleRate;
+                _info.Channels = _decoder.Channels;
+                _info.TotalFrames = _decoder.TotalFrames > 0
+                    ? _decoder.TotalFrames
+                    : (_durationHint > 0
+                        ? (ulong)(_decoder.SampleRate * _durationHint)
+                        : 0);
+                _info.Format = _decoder.Format;
+                _isEndOfStream = false;
+
+                if (_pendingSeek >= 0)
                 {
-                    _info.SampleRate = _decoder.SampleRate;
-                    _info.Channels = _decoder.Channels;
-                    _info.TotalFrames = _decoder.TotalFrames > 0
-                        ? _decoder.TotalFrames
-                        : (_durationHint > 0
-                            ? (ulong)(_decoder.SampleRate * _durationHint)
-                            : 0);
-                    _info.Format = _decoder.Format;
-                    _isEndOfStream = false;
-
-                    // Execute any pending seek
-                    if (_pendingSeek >= 0)
-                    {
-                        _decoder.Seek((ulong)_pendingSeek);
-                        _currentFrame = (ulong)_pendingSeek;
-                        _pendingSeek = -1;
-                        _seekBuffering = _cache != null && !_cache.IsComplete;
-                    }
+                    _decoder.Seek((ulong)_pendingSeek);
+                    _currentFrame = (ulong)_pendingSeek;
+                    _pendingSeek = -1;
+                    _seekBuffering = _cache != null && !_cache.IsComplete;
                 }
             }
         }
 
         // ===== OnCacheComplete: just a flag, no switch =====
 
+        private void OnCacheCommitting()
+        {
+            lock (_decoderLock)
+            {
+                _completionTransition = true;
+                _decoder?.Dispose();
+                _decoder = null;
+            }
+        }
+
         private void OnCacheComplete()
         {
-            // Nothing to do. The decoder is already reading from the file.
-            // When ReadFrames returns 0 and cache is complete → real EOF.
-            _logger?.LogInformation("Cache complete — decoder will naturally reach EOF");
+            var cache = _cache;
+            if (_disposed || cache == null) return;
+
+            try
+            {
+                lock (_decoderLock)
+                {
+                    if (_disposed) return;
+                    ulong resumeFrame;
+                    lock (_lock) { resumeFrame = _currentFrame; }
+                    OpenDecoderLocked(cache.FinalPath, false);
+                    if (resumeFrame > 0 && _decoder.Seek(resumeFrame))
+                    {
+                        lock (_lock) { _currentFrame = resumeFrame; }
+                    }
+                    _finalDecoderReady = true;
+                    _completionTransition = false;
+                    _isReady = true;
+                }
+                _logger?.LogInformation("Cache complete — reopened final file at frame {Frame}", CurrentFrame);
+            }
+            catch (Exception ex)
+            {
+                _completionTransition = false;
+                _logger?.LogWarning("Failed to reopen completed cache: {Msg}", ex.Message);
+            }
         }
 
         // ===== ReadFrames: single data path =====
@@ -213,10 +267,19 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
             if (_disposed) return 0;
 
             // Lazy init: if the background open did not finish yet, try now.
-            if (_decoder == null && _cache != null &&
-                (_cache.Downloaded >= 65536 || _cache.IsComplete))
+            if (_completionTransition)
+                return 0;
+
+            if (_decoder == null && _cache != null && _cache.IsComplete && !_finalDecoderReady)
             {
-                try { OpenDecoder(_cache.CachePath, true); _isReady = true; }
+                try { OnCacheComplete(); }
+                catch { }
+            }
+
+            if (_decoder == null && _cache != null && !_cache.IsComplete &&
+                _cache.Downloaded >= 65536)
+            {
+                try { TryOpenGrowingDecoder(_cache); }
                 catch { /* will retry next call */ }
             }
 
@@ -366,15 +429,21 @@ namespace OmniMixPlayer.Backend.ModuleSystem.Services.Streaming
 
         public void Dispose()
         {
-            if (_disposed) return;
+            if (Interlocked.Exchange(ref _disposeState, 1) != 0) return;
             _disposed = true;
 
+            var cache = _cache;
+            if (cache != null)
+            {
+                cache.OnCommitting -= OnCacheCommitting;
+                cache.OnComplete -= OnCacheComplete;
+            }
             lock (_decoderLock)
             {
                 _decoder?.Dispose();
                 _decoder = null;
             }
-            _cache?.Dispose();
+            cache?.Dispose();
             _cache = null;
         }
     }

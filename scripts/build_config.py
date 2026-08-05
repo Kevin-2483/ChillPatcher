@@ -137,10 +137,16 @@ def _find_steam_library() -> str:
         if p.is_dir() and p not in candidates:
             candidates.append(p)
 
-    # 4) 检查哪个库包含目标游戏
+    # # 4) 检查哪个库包含目标游戏
+    # target = "Chill with You Lo-Fi Story"
+    # for lib in candidates:
+    #     game_dir = lib / "common" / target
+    #     if game_dir.is_dir():
+    #         return str(lib)
     target = "Chill with You Lo-Fi Story"
     for lib in candidates:
-        game_dir = lib / "common" / target
+        # VDF "path" 指向 Steam 安装根，游戏在 {path}/steamapps/common/ 下
+        game_dir = lib / "steamapps" / "common" / target
         if game_dir.is_dir():
             return str(lib)
 
@@ -406,13 +412,14 @@ NATIVE_PROJECTS_ALWAYS = [
     "OmniAudioDecoder", "OmniPcmShared", "SpotifyLibrespotBridge",
     "EsbuildBridge", "SmtcBridge",
 ]
-NATIVE_PROJECTS_FULL_ONLY = ["netease_bridge", "qqmusic_bridge"]
+NATIVE_PROJECTS_FULL_ONLY = ["netease_bridge", "qqmusic_bridge", "kugou_bridge"]
 
 PLAYER_MODULE_MAP = [
     ("LocalFolder", "com.chillpatcher.localfolder"),
     ("Netease", "com.chillpatcher.netease"),
     ("Bilibili", "com.chillpatcher.bilibili"),
     ("QQMusic", "com.chillpatcher.qqmusic"),
+    ("Kugou", "com.chillpatcher.kugou"),
     ("Spotify", "com.chillpatcher.spotify"),
 ]
 

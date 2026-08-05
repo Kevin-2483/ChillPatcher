@@ -6,7 +6,7 @@ from pathlib import Path
 
 from build_config import (
     NATIVE_PLUGINS_DIR, NATIVE_PROJECTS_ALWAYS, NATIVE_PROJECTS_FULL_ONLY,
-    OMNI_PCM_DLL,
+    OMNI_PCM_DLL, PLAYER_DIR,
 )
 from .base import TaskNode, TaskStatus
 from .common import clean_cmake_cache, copy_file, info, run_cmd
@@ -59,9 +59,15 @@ def _make_native_build_fn(proj: str):
             return TaskStatus.SKIPPED
         clean_cmake_cache(src)
         args = ["build.bat"]
-        if proj in ("netease_bridge", "qqmusic_bridge"):
+        if proj in ("netease_bridge", "qqmusic_bridge", "kugou_bridge"):
             args.append("--no-pause")
         code = run_cmd(args, cwd=src)
+        if code == 0 and proj == "kugou_bridge":
+            dll = src / "ChillKugou.dll"
+            if dll.exists():
+                dst = PLAYER_DIR / "modules" / "Kugou" / "native" / "x64"
+                dst.mkdir(parents=True, exist_ok=True)
+                copy_file(dll, dst)
         if code != 0:
             info(f"  WARNING: {proj} build failed (exit={code})")
         return code
